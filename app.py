@@ -1,146 +1,123 @@
-from flask import Flask, render_template, request
-import requests
-from bs4 import BeautifulSoup
-from urllib.parse import urljoin, urlparse
-import time
-import json
 import os
+from telegram import Update
+from telegram.ext import (
+    ApplicationBuilder, CommandHandler, MessageHandler,
+    ContextTypes, ConversationHandler, filters
+)
 
+from flask import Flask, request
+
+# -------------------------------
+# إعداد البوت
+# -------------------------------
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # ضع التوكن في Environment Variables داخل Render
+PORT = int(os.environ.get("PORT", 5000))  # Render يعين Port تلقائياً
+RETI, RBC = range(2)
+user_data = {}
+
+# -------------------------------
+# منطق الحساب
+# -------------------------------
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_data[update.effective_chat.id] = {"reti": [], "rbc": []}
+    await update.message.reply_text("👋 أهلاً! سنقوم بحساب نسبة الريتيكولوسيت.\n\n"
+                                    "أدخل عدد الريتيكولوسيت في Champ 1:")
+    return RETI
+
+async def get_reti(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    data = user_data[chat_id]
+    try:
+        value = int(update.message.text)
+        if value < 0:
+            raise ValueError
+        data["reti"].append(value)
+    except ValueError:
+        await update.message.reply_text("⚠️ الرجاء إدخال رقم صحيح موجب.")
+        return RETI
+
+    if len(data["reti"]) < 10:
+        await update.message.reply_text(f"Champ {len(data['reti'])+1}:")
+        return RETI
+    else:
+        await update.message.reply_text("✅ انتهينا من الريتيكولوسيت.\n\n"
+                                        "الآن أدخل عدد الكريات الحمراء في ربع Champ 1:")
+        return RBC
+
+async def get_rbc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    data = user_data[chat_id]
+    try:
+        value = int(update.message.text)
+        if value < 0:
+            raise ValueError
+        data["rbc"].append(value)
+    except ValueError:
+        await update.message.reply_text("⚠️ الرجاء إدخال رقم صحيح موجب.")
+        return RBC
+
+    if len(data["rbc"]) < 3:
+        await update.message.reply_text(f"ربع Champ {len(data['rbc'])+1}:")
+        return RBC
+    else:
+        # الحسابات
+        reti_total = sum(data["reti"])
+        rbc1, rbc2, rbc3 = [v * 4 for v in data["rbc"]]
+        avg_rbc = (rbc1 + rbc2 + rbc3) / 3
+        rbc_total = avg_rbc * 10
+        result = (reti_total / rbc_total) * 100
+
+        await update.message.reply_text(
+            f"--- النتيجة ---\n"
+            f"🔹 مجموع الريتيكولوسيت = {reti_total}\n"
+            f"🔹 متوسط الكريات الحمراء (×10) = {rbc_total:.2f}\n"
+            f"🔹 نسبة الريتيكولوسيت = {result:.2f} %"
+        )
+        return ConversationHandler.END
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("🚫 تم إلغاء العملية.")
+    return ConversationHandler.END
+
+# -------------------------------
+# Webhook مع Flask
+# -------------------------------
 app = Flask(__name__)
-visited = set()
-corrections_file = 'corrections.json'
 
-# تحميل التصحيحات إن وجدت
-if os.path.exists(corrections_file):
-    with open(corrections_file, 'r', encoding='utf-8') as f:
-        corrections = json.load(f)
-else:
-    corrections = {}
+@app.route(f"/{BOT_TOKEN}", methods=["POST"])
+def webhook():
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    application.update_queue.put_nowait(update)
+    return "ok"
 
-def is_valid_url(url):
-    parsed = urlparse(url)
-    return parsed.scheme in ['http', 'https']
-
-def get_text_from_page(soup):
-    return ' '.join(p.get_text().strip() for p in soup.find_all(['p', 'h1', 'h2']) if len(p.get_text()) > 30)
-
-def summarize_text(text, max_sentences=3):
-    sentences = text.split('.')
-    summary = '. '.join(sentences[:max_sentences]) + '.' if len(sentences) > max_sentences else text
-    return apply_corrections(summary)
-
-def apply_corrections(text):
-    for wrong, correct in corrections.items():
-        text = text.replace(wrong, correct)
-    return text
-
-def save_correction(wrong, correct):
-    corrections[wrong] = correct
-    with open(corrections_file, 'w', encoding='utf-8') as f:
-        json.dump(corrections, f, ensure_ascii=False, indent=2)
-
-def crawl_and_summarize(start_url, depth=1, max_pages=5):
-    results = []
-    queue = [(start_url, 0)]
-
-    while queue and len(results) < max_pages:
-        current_url, current_depth = queue.pop(0)
-        if current_url in visited or current_depth > depth:
-            continue
-        visited.add(current_url)
-
-        try:
-            response = requests.get(current_url, timeout=10, headers={'User-Agent': 'Mozilla/5.0'})
-            if response.status_code != 200:
-                continue
-
-            soup = BeautifulSoup(response.content, 'html.parser')
-            text = get_text_from_page(soup)
-            summary = summarize_text(text)
-
-            results.append({
-                'url': current_url,
-                'summary': summary or 'لا يوجد محتوى قابل للتلخيص.',
-            })
-
-            for link in soup.find_all('a', href=True):
-                full_url = urljoin(current_url, link['href'])
-                if is_valid_url(full_url) and full_url not in visited:
-                    queue.append((full_url, current_depth + 1))
-
-        except Exception as e:
-            results.append({
-                'url': current_url,
-                'summary': f'خطأ أثناء الزحف: {str(e)}',
-            })
-
-        time.sleep(1)
-
-    return results
-
-def search_from_engines(query, max_links=10):
-    headers = {'User-Agent': 'Mozilla/5.0'}
-    links = set()
-
-    # Bing
-    try:
-        res = requests.get(f"https://www.bing.com/search?q={query}", headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for a in soup.find_all('a', href=True):
-            url = a['href']
-            if is_valid_url(url):
-                links.add(url)
-                if len(links) >= max_links:
-                    break
-    except:
-        pass
-
-    # Yahoo
-    try:
-        res = requests.get(f"https://search.yahoo.com/search?p={query}", headers=headers, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        for a in soup.find_all('a', href=True):
-            url = a['href']
-            if is_valid_url(url):
-                links.add(url)
-                if len(links) >= max_links:
-                    break
-    except:
-        pass
-
-    return list(links)
-
-def crawl_multiple_links(urls, depth=1, max_pages=5):
-    all_results = []
-    for url in urls:
-        result = crawl_and_summarize(url, depth=depth, max_pages=max_pages)
-        all_results.extend(result)
-    return all_results
-
-def safe_int(value, default):
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-@app.route('/', methods=['GET', 'POST'])
+@app.route("/")
 def index():
-    results = []
-    if request.method == 'POST':
-        query = request.form.get('query')
-        depth = safe_int(request.form.get('depth'), 1)
-        max_pages = safe_int(request.form.get('max_pages'), 5)
-        urls = search_from_engines(query)
-        results = crawl_multiple_links(urls, depth=depth, max_pages=max_pages)
-    return render_template('index.html', results=results)
+    return "🤖 البوت شغال!"
 
-@app.route('/correction', methods=['POST'])
-def correction():
-    wrong = request.form.get('wrong')
-    correct = request.form.get('correct')
-    if wrong and correct:
-        save_correction(wrong, correct)
-    return 'تم الحفظ بنجاح'
+# -------------------------------
+# Main
+# -------------------------------
+application = ApplicationBuilder().token(BOT_TOKEN).build()
 
-if __name__ == '__main__':
-    app.run(debug=True)
+conv_handler = ConversationHandler(
+    entry_points=[CommandHandler("start", start)],
+    states={
+        RETI: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_reti)],
+        RBC: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_rbc)],
+    },
+    fallbacks=[CommandHandler("cancel", cancel)],
+)
+
+application.add_handler(conv_handler)
+
+if __name__ == "__main__":
+    # تفعيل Webhook
+    import asyncio
+    async def set_webhook():
+        url = f"https://{os.getenv('RENDER_EXTERNAL_HOSTNAME')}/{BOT_TOKEN}"
+        await application.bot.set_webhook(url)
+
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(set_webhook())
+
+    app.run(host="0.0.0.0", port=PORT)
