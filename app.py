@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
-from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
+import json
 
 app = Flask(__name__)
 
@@ -12,27 +12,39 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 user_states = {}
 
 # Définition des claviers
-main_keyboard = ReplyKeyboardMarkup([
-    ['/calc', '/plaquettes'],
-    ['/dilution', '/start']
-], resize_keyboard=True)
+main_keyboard = {
+    'keyboard': [
+        ['/calc', '/plaquettes'],
+        ['/dilution', '/start']
+    ],
+    'resize_keyboard': True
+}
 
-numeric_keyboard = ReplyKeyboardMarkup([
-    ['0', '1', '2', '3', '4'],
-    ['5', '6', '7', '8', '9'],
-    ['10', '15', '20', '25', '30'],
-    ['Annuler']
-], resize_keyboard=True)
+numeric_keyboard = {
+    'keyboard': [
+        ['0', '1', '2', '3', '4'],
+        ['5', '6', '7', '8', '9'],
+        ['10', '15', '20', '25', '30'],
+        ['Annuler']
+    ],
+    'resize_keyboard': True
+}
 
-cancel_keyboard = ReplyKeyboardMarkup([
-    ['Annuler']
-], resize_keyboard=True)
+cancel_keyboard = {
+    'keyboard': [
+        ['Annuler']
+    ],
+    'resize_keyboard': True
+}
 
-dilution_keyboard = ReplyKeyboardMarkup([
-    ['1/2', '1/10', '1/20'],
-    ['1/50', '1/100', '1/200'],
-    ['Annuler']
-], resize_keyboard=True)
+dilution_keyboard = {
+    'keyboard': [
+        ['1/2', '1/10', '1/20'],
+        ['1/50', '1/100', '1/200'],
+        ['Annuler']
+    ],
+    'resize_keyboard': True
+}
 
 @app.route('/')
 def home():
@@ -234,9 +246,12 @@ def send_message(chat_id, text, reply_markup=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
     data = {
         "chat_id": chat_id, 
-        "text": text,
-        "reply_markup": reply_markup.to_dict() if reply_markup else None
+        "text": text
     }
+    
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
+    
     requests.post(url, json=data)
 
 if __name__ == '__main__':
