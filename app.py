@@ -21,7 +21,6 @@ def webhook():
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
 
-        # Commandes principales
         if text == '/start':
             send_welcome_start(chat_id)
             user_states[chat_id] = {'step': 0}
@@ -93,16 +92,12 @@ def handle_reti(chat_id, value):
             state['step'] += 1
         else:
             reti_total = sum(state['reti_counts'])
-            rbc1 = state['rbc_counts'][0] * 4
-            rbc2 = state['rbc_counts'][1] * 4
-            rbc3 = state['rbc_counts'][2] * 4
-            avg_rbc = (rbc1 + rbc2 + rbc3) / 3
-            rbc_total = avg_rbc * state['nb_champs']
-            result = (reti_total / rbc_total) * 100
+            rbc_total = sum([x*4 for x in state['rbc_counts']]) / 3 * state['nb_champs']
+            taux = (reti_total / rbc_total) * 100
             message = f"--- Résultat Réticulocytes ---\n"
             message += f"Total des réticulocytes = {reti_total}\n"
             message += f"Moyenne des globules rouges (×{state['nb_champs']}) = {rbc_total:.2f}\n"
-            message += f"Taux de réticulocytes = {result:.2f} %"
+            message += f"Taux de réticulocytes = {taux:.2f} %"
             send_message(chat_id, message)
             send_welcome_end(chat_id)
             user_states[chat_id] = {'step': 0}
@@ -142,11 +137,8 @@ def handle_plaquettes(chat_id, value):
 
     if state['step'] == 303:
         state['gr_auto'] = value
-        plaq_moy = sum(state['plaq_counts']) / len(state['plaq_counts'])
-        rbc1 = state['rbc_counts'][0] * 4
-        rbc2 = state['rbc_counts'][1] * 4
-        rbc3 = state['rbc_counts'][2] * 4
-        avg_rbc = (rbc1 + rbc2 + rbc3) / 3
+        plaq_moy = sum(state['plaq_counts']) / state['nb_champs']
+        avg_rbc = sum([x*4 for x in state['rbc_counts']]) / 3
         result = (state['gr_auto'] * plaq_moy) / avg_rbc
         message = f"--- Résultat Plaquettes ---\n"
         message += f"Moyenne des plaquettes ({state['nb_champs']} champs) = {plaq_moy:.2f}\n"
@@ -162,21 +154,35 @@ def handle_plaquettes(chat_id, value):
 def handle_dilution(chat_id, text):
     try:
         if '/' in text:
-            numer, denom = text.split('/')
-            numer = int(numer)
-            denom = int(denom)
+            numer, denom = map(int, text.split('/'))
             if numer <= 0 or denom <= 0 or numer > denom:
                 raise ValueError
             message = f"Pour préparer une dilution {numer}/{denom} :\n"
             message += f"- Prenez {numer} partie(s) de la substance\n"
             message += f"- Ajoutez {denom - numer} partie(s) de diluant"
             send_message(chat_id, message)
+            # Option pour entrer quantité
+            send_message(chat_id, "Si vous voulez, entrez la quantité totale pour calculer les volumes exacts, ou tapez /skip pour ignorer :")
+            user_states[chat_id]['step'] = 401
+        elif text == '/skip' and user_states[chat_id]['step'] == 401:
+            send_welcome_end(chat_id)
+            user_states[chat_id] = {'step': 0}
+        elif user_states[chat_id]['step'] == 401:
+            quantite = float(text)
+            numer, denom = map(int, user_states[chat_id].get('last_dilution', '1/2').split('/'))
+            part_substance = (numer/denom) * quantite
+            part_diluant = quantite - part_substance
+            message = f"Pour {quantite} unité(s) totale(s) :\n- Substance : {part_substance}\n- Diluant : {part_diluant}"
+            send_message(chat_id, message)
+            send_welcome_end(chat_id)
+            user_states[chat_id] = {'step': 0}
         else:
             send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.")
     except:
         send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.")
     finally:
-        user_states[chat_id] = {'step': 0}
+        if 'last_dilution' not in user_states[chat_id]:
+            user_states[chat_id]['last_dilution'] = text
 
 # -------------------- Messages --------------------
 
@@ -198,3 +204,9 @@ def send_welcome_end(chat_id):
 # -------------------- Envoi des messages --------------------
 
 def send_message(chat_id, text):
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    data = {"chat_id": chat_id, "text": text}
+    requests.post(url, json=data)
+
+if __name__ == '__main__':
+    app.run(host='0.0.0.0', port=5000)
