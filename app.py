@@ -24,7 +24,7 @@ def webhook():
         text = data['message'].get('text', '')
         
         if text == '/start':
-            send_welcome(chat_id)
+            send_welcome_start(chat_id)
             user_states[chat_id] = {'step': 0}
         
         elif text == '/calc':
@@ -106,7 +106,7 @@ def handle_reti(chat_id, value):
             message += f"Moyenne des globules rouges (×{state['nb_champs']}) = {rbc_total:.2f}\n"
             message += f"Taux de réticulocytes = {result:.2f} %"
             send_message(chat_id, message)
-            send_welcome(chat_id)
+            send_welcome_end(chat_id)
             user_states[chat_id] = {'step': 0}
 
 def handle_plaquettes(chat_id, value):
@@ -159,11 +159,20 @@ def handle_plaquettes(chat_id, value):
         message += f"GR auto = {state['gr_auto']}\n"
         message += f"👉 Résultat final = {result:.2f}"
         send_message(chat_id, message)
-        send_welcome(chat_id)
+        send_welcome_end(chat_id)
         user_states[chat_id] = {'step': 0}
 
-# Message de bienvenue / après résultat
-def send_welcome(chat_id):
+# -------------------- Messages --------------------
+
+# Message de bienvenue initial
+def send_welcome_start(chat_id):
+    send_message(chat_id,
+                 "👋 Bonjour ! Je suis votre bot pour le calcul des réticulocytes et des plaquettes.\n"
+                 "🔹 Tapez /calc pour calculer le taux de réticulocytes\n"
+                 "🔹 Tapez /plaquettes pour calculer les plaquettes")
+
+# Message après résultat
+def send_welcome_end(chat_id):
     send_message(chat_id,
                  "✅ Calcul terminé !\n"
                  "👋 Vous voulez essayer un autre calcul ?\n"
