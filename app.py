@@ -162,9 +162,9 @@ def handle_plaquettes(chat_id, value):
         send_welcome(chat_id)
         user_states[chat_id] = {'step': 0}
 
-# Message de bienvenue
+# Message de bienvenue / après résultat
 def send_welcome(chat_id):
-    send_message(chat_id, "👋 Dr wassima, khadija
+    send_message(chat_id,
                  "✅ Calcul terminé !\n"
                  "👋 Vous voulez essayer un autre calcul ?\n"
                  "🔹 /calc → Taux de réticulocytes\n"
@@ -178,5 +178,3 @@ def send_message(chat_id, text):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
-
-
