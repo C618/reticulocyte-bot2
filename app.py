@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 import requests
 import os
+from telegram import ReplyKeyboardMarkup, ReplyKeyboardRemove
 
 app = Flask(__name__)
 
@@ -9,6 +10,29 @@ TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_states = {}
+
+# Définition des claviers
+main_keyboard = ReplyKeyboardMarkup([
+    ['/calc', '/plaquettes'],
+    ['/dilution', '/start']
+], resize_keyboard=True)
+
+numeric_keyboard = ReplyKeyboardMarkup([
+    ['0', '1', '2', '3', '4'],
+    ['5', '6', '7', '8', '9'],
+    ['10', '15', '20', '25', '30'],
+    ['Annuler']
+], resize_keyboard=True)
+
+cancel_keyboard = ReplyKeyboardMarkup([
+    ['Annuler']
+], resize_keyboard=True)
+
+dilution_keyboard = ReplyKeyboardMarkup([
+    ['1/2', '1/10', '1/20'],
+    ['1/50', '1/100', '1/200'],
+    ['Annuler']
+], resize_keyboard=True)
 
 @app.route('/')
 def home():
@@ -25,14 +49,17 @@ def webhook():
             send_welcome_start(chat_id)
             user_states[chat_id] = {'step': 0}
         elif text == '/calc':
-            send_message(chat_id, "🔢 Combien de champs voulez-vous analyser pour les réticulocytes ?")
+            send_message(chat_id, "🔢 Combien de champs voulez-vous analyser pour les réticulocytes ?", numeric_keyboard)
             user_states[chat_id] = {'step': 50, 'type': 'reti', 'reti_counts': [], 'rbc_counts': [], 'nb_champs': None}
         elif text == '/plaquettes':
-            send_message(chat_id, "🩸 Combien de champs voulez-vous analyser pour les plaquettes ?")
+            send_message(chat_id, "🩸 Combien de champs voulez-vous analyser pour les plaquettes ?", numeric_keyboard)
             user_states[chat_id] = {'step': 100, 'type': 'plaq', 'plaq_counts': [], 'rbc_counts': [], 'gr_auto': None, 'nb_champs': None}
         elif text == '/dilution':
-            send_message(chat_id, "🔹 Entrez la dilution souhaitée (ex: 1/2, 1/10) :")
+            send_message(chat_id, "🔹 Entrez la dilution souhaitée (ex: 1/2, 1/10) :", dilution_keyboard)
             user_states[chat_id] = {'step': 400, 'type': 'dilution'}
+        elif text.lower() == 'annuler':
+            send_message(chat_id, "❌ Opération annulée.", main_keyboard)
+            user_states[chat_id] = {'step': 0}
         elif chat_id in user_states:
             handle_input(chat_id, text)
     return jsonify({'status': 'ok'})
@@ -47,10 +74,10 @@ def handle_input(chat_id, text):
         try:
             value = int(text)
             if value < 0:
-                send_message(chat_id, "⚠️ Veuillez entrer un nombre positif uniquement.")
+                send_message(chat_id, "⚠️ Veuillez entrer un nombre positif uniquement.", numeric_keyboard)
                 return
         except ValueError:
-            send_message(chat_id, "⚠️ Veuillez entrer un nombre entier.")
+            send_message(chat_id, "⚠️ Veuillez entrer un nombre entier.", numeric_keyboard)
             return
     else:
         value = text  # pour dilution
@@ -69,7 +96,7 @@ def handle_reti(chat_id, value):
 
     if state['step'] == 50:
         state['nb_champs'] = value
-        send_message(chat_id, f"🔢 Entrez le nombre de réticulocytes dans le Champ 1 :")
+        send_message(chat_id, f"🔢 Entrez le nombre de réticulocytes dans le Champ 1 :", numeric_keyboard)
         state['step'] = 51
         return
 
@@ -77,10 +104,10 @@ def handle_reti(chat_id, value):
         state['reti_counts'].append(value)
         champ_actuel = len(state['reti_counts']) + 1
         if len(state['reti_counts']) < state['nb_champs']:
-            send_message(chat_id, f"Entrez le nombre de réticulocytes dans le Champ {champ_actuel} :")
+            send_message(chat_id, f"Entrez le nombre de réticulocytes dans le Champ {champ_actuel} :", numeric_keyboard)
             state['step'] += 1
         else:
-            send_message(chat_id, "👉 Maintenant, entrez le nombre de globules rouges dans le quart de Champ 1 :")
+            send_message(chat_id, "👉 Maintenant, entrez le nombre de globules rouges dans le quart de Champ 1 :", numeric_keyboard)
             state['step'] = 200
         return
 
@@ -88,7 +115,7 @@ def handle_reti(chat_id, value):
         state['rbc_counts'].append(value)
         if state['step'] < 202:
             champ = state['step'] - 199
-            send_message(chat_id, f"Entrez le nombre de globules rouges dans le quart de Champ {champ + 1} :")
+            send_message(chat_id, f"Entrez le nombre de globules rouges dans le quart de Champ {champ + 1} :", numeric_keyboard)
             state['step'] += 1
         else:
             reti_total = sum(state['reti_counts'])
@@ -98,7 +125,7 @@ def handle_reti(chat_id, value):
             message += f"Total des réticulocytes = {reti_total}\n"
             message += f"Moyenne des globules rouges (×{state['nb_champs']}) = {rbc_total:.2f}\n"
             message += f"Taux de réticulocytes = {taux:.2f} %"
-            send_message(chat_id, message)
+            send_message(chat_id, message, main_keyboard)
             send_welcome_end(chat_id)
             user_states[chat_id] = {'step': 0}
 
@@ -109,7 +136,7 @@ def handle_plaquettes(chat_id, value):
 
     if state['step'] == 100:
         state['nb_champs'] = value
-        send_message(chat_id, f"👉 Entrez le nombre de plaquettes dans le Champ 1 :")
+        send_message(chat_id, f"👉 Entrez le nombre de plaquettes dans le Champ 1 :", numeric_keyboard)
         state['step'] = 101
         return
 
@@ -117,10 +144,10 @@ def handle_plaquettes(chat_id, value):
         state['plaq_counts'].append(value)
         champ_actuel = len(state['plaq_counts']) + 1
         if len(state['plaq_counts']) < state['nb_champs']:
-            send_message(chat_id, f"Entrez le nombre de plaquettes dans le Champ {champ_actuel} :")
+            send_message(chat_id, f"Entrez le nombre de plaquettes dans le Champ {champ_actuel} :", numeric_keyboard)
             state['step'] += 1
         else:
-            send_message(chat_id, "👉 Maintenant, entrez le nombre de globules rouges dans le quart de Champ 1 :")
+            send_message(chat_id, "👉 Maintenant, entrez le nombre de globules rouges dans le quart de Champ 1 :", numeric_keyboard)
             state['step'] = 300
         return
 
@@ -128,10 +155,10 @@ def handle_plaquettes(chat_id, value):
         state['rbc_counts'].append(value)
         if state['step'] < 302:
             champ = state['step'] - 299
-            send_message(chat_id, f"Entrez le nombre de globules rouges dans le quart de Champ {champ + 1} :")
+            send_message(chat_id, f"Entrez le nombre de globules rouges dans le quart de Champ {champ + 1} :", numeric_keyboard)
             state['step'] += 1
         else:
-            send_message(chat_id, "⚙️ Enfin, entrez le nombre de globules rouges auto (machine) :")
+            send_message(chat_id, "⚙️ Enfin, entrez le nombre de globules rouges auto (machine) :", numeric_keyboard)
             state['step'] = 303
         return
 
@@ -145,7 +172,7 @@ def handle_plaquettes(chat_id, value):
         message += f"Moyenne des GR = {avg_rbc:.2f}\n"
         message += f"GR auto = {state['gr_auto']}\n"
         message += f"👉 Résultat final = {result:.2f}"
-        send_message(chat_id, message)
+        send_message(chat_id, message, main_keyboard)
         send_welcome_end(chat_id)
         user_states[chat_id] = {'step': 0}
 
@@ -160,10 +187,11 @@ def handle_dilution(chat_id, text):
             message = f"Pour préparer une dilution {numer}/{denom} :\n"
             message += f"- Prenez {numer} partie(s) de la substance\n"
             message += f"- Ajoutez {denom - numer} partie(s) de diluant"
-            send_message(chat_id, message)
+            send_message(chat_id, message, main_keyboard)
             # Option pour entrer quantité
-            send_message(chat_id, "Si vous voulez, entrez la quantité totale pour calculer les volumes exacts, ou tapez /skip pour ignorer :")
+            send_message(chat_id, "Si vous voulez, entrez la quantité totale pour calculer les volumes exacts, ou tapez /skip pour ignorer :", cancel_keyboard)
             user_states[chat_id]['step'] = 401
+            user_states[chat_id]['last_dilution'] = text
         elif text == '/skip' and user_states[chat_id]['step'] == 401:
             send_welcome_end(chat_id)
             user_states[chat_id] = {'step': 0}
@@ -172,17 +200,14 @@ def handle_dilution(chat_id, text):
             numer, denom = map(int, user_states[chat_id].get('last_dilution', '1/2').split('/'))
             part_substance = (numer/denom) * quantite
             part_diluant = quantite - part_substance
-            message = f"Pour {quantite} unité(s) totale(s) :\n- Substance : {part_substance}\n- Diluant : {part_diluant}"
-            send_message(chat_id, message)
+            message = f"Pour {quantite} unité(s) totale(s) :\n- Substance : {part_substance:.2f}\n- Diluant : {part_diluant:.2f}"
+            send_message(chat_id, message, main_keyboard)
             send_welcome_end(chat_id)
             user_states[chat_id] = {'step': 0}
         else:
-            send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.")
+            send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.", dilution_keyboard)
     except:
-        send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.")
-    finally:
-        if 'last_dilution' not in user_states[chat_id]:
-            user_states[chat_id]['last_dilution'] = text
+        send_message(chat_id, "⚠️ Format incorrect. Utilisez le format 1/2, 1/10, etc.", dilution_keyboard)
 
 # -------------------- Messages --------------------
 
@@ -191,7 +216,8 @@ def send_welcome_start(chat_id):
                  "👋 Bonjour ! Je suis votre bot pour le calcul des réticulocytes, plaquettes et dilutions.\n"
                  "🔹 Tapez /calc pour calculer le taux de réticulocytes\n"
                  "🔹 Tapez /plaquettes pour calculer les plaquettes\n"
-                 "🔹 Tapez /dilution pour préparer une dilution")
+                 "🔹 Tapez /dilution pour préparer une dilution",
+                 main_keyboard)
 
 def send_welcome_end(chat_id):
     send_message(chat_id,
@@ -199,13 +225,18 @@ def send_welcome_end(chat_id):
                  "👋 Vous voulez essayer un autre calcul ?\n"
                  "🔹 /calc → Taux de réticulocytes\n"
                  "🔹 /plaquettes → Plaquettes\n"
-                 "🔹 /dilution → Dilution")
+                 "🔹 /dilution → Dilution",
+                 main_keyboard)
 
 # -------------------- Envoi des messages --------------------
 
-def send_message(chat_id, text):
+def send_message(chat_id, text, reply_markup=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
-    data = {"chat_id": chat_id, "text": text}
+    data = {
+        "chat_id": chat_id, 
+        "text": text,
+        "reply_markup": reply_markup.to_dict() if reply_markup else None
+    }
     requests.post(url, json=data)
 
 if __name__ == '__main__':
