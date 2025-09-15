@@ -164,7 +164,11 @@ def handle_plaquettes(chat_id, value):
 
 # Message de bienvenue
 def send_welcome(chat_id):
-    send_message(chat_id, "👋 !\nTapez /calc pour calculer le taux de réticulocytes.\nTapez /plaquettes pour calculer les plaquettes.")
+    send_message(chat_id, "👋 Dr wassima, khadija
+                 "✅ Calcul terminé !\n"
+                 "👋 Vous voulez essayer un autre calcul ?\n"
+                 "🔹 /calc → Taux de réticulocytes\n"
+                 "🔹 /plaquettes → Plaquettes")
 
 # Envoi des messages
 def send_message(chat_id, text):
@@ -174,4 +178,5 @@ def send_message(chat_id, text):
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000)
+
 
