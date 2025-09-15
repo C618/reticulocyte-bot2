@@ -1,85 +1,18 @@
-import os
-import logging
+from flask import Flask, request, jsonify
 import requests
+import os
 import json
 import re
 from datetime import datetime
-from telegram import (
-    Update,
-    InlineKeyboardMarkup,
-    InlineKeyboardButton,
-)
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    CallbackQueryHandler,
-    ContextTypes,
-)
-from flask import Flask, request, jsonify
 
-# Initialize Flask app
 app = Flask(__name__)
 
-# Setup logging
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
-)
-logger = logging.getLogger(__name__)
-
-# IPTV configuration
-M3U_URL = "https://raw.githubusercontent.com/hemzaberkane/ARAB-IPTV/main/ARABIPTV.m3u"
-PAGE_SIZE = 6
-
-# Bot token
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Votre token de bot
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# State management for laboratory assistant
 user_states = {}
 user_languages = {}
-calculations_history = []
-
-# ------------------- IPTV Functions -------------------
-
-def fetch_m3u(url: str) -> str:
-    r = requests.get(url, timeout=15)
-    r.raise_for_status()
-    return r.text
-
-def parse_m3u(m3u_text: str):
-    lines = [ln.strip() for ln in m3u_text.splitlines() if ln.strip()]
-    channels = []
-    title = None
-    for ln in lines:
-        if ln.startswith("#EXTINF"):
-            if "," in ln:
-                title = ln.split(",", 1)[1].strip()
-            else:
-                title = ln
-        elif not ln.startswith("#"):
-            stream = ln
-            if title is None:
-                title = stream
-            channels.append((title, stream))
-            title = None
-    return channels
-
-def build_keyboard(channels, page):
-    start = page * PAGE_SIZE
-    subset = channels[start:start + PAGE_SIZE]
-    buttons = []
-    for idx, (title, _) in enumerate(subset, start=start):
-        buttons.append([InlineKeyboardButton(text=title[:40], callback_data=f"play:{idx}")])
-    nav = []
-    if page > 0:
-        nav.append(InlineKeyboardButton("⬅️ السابق", callback_data=f"page:{page-1}"))
-    if start + PAGE_SIZE < len(channels):
-        nav.append(InlineKeyboardButton("التالي ➡️", callback_data=f"page:{page+1}"))
-    if nav:
-        buttons.append(nav)
-    return InlineKeyboardMarkup(buttons)
-
-# ------------------- Laboratory Assistant Functions -------------------
 
 # Définition des claviers
 def get_main_keyboard(lang='fr'):
@@ -88,7 +21,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 Réticulocytes', '🩸 Plaquettes'],
                 ['🧪 Dilution', '⚙️ Paramètres'],
-                ['ℹ️ Aide', '🔄 Langue', '📺 IPTV']
+                ['ℹ️ Aide', '🔄 Langue']
             ],
             'resize_keyboard': True
         },
@@ -96,7 +29,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 Reticulocytes', '🩸 Platelets'],
                 ['🧪 Dilution', '⚙️ Settings'],
-                ['ℹ️ Help', '🔄 Language', '📺 IPTV']
+                ['ℹ️ Help', '🔄 Language']
             ],
             'resize_keyboard': True
         },
@@ -104,7 +37,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 الخلايا الشبكية', '🩸 الصفائح الدموية'],
                 ['🧪 التخفيف', '⚙️ الإعدادات'],
-                ['ℹ️ المساعدة', '🔄 اللغة', '📺 IPTV']
+                ['ℹ️ المساعدة', '🔄 اللغة']
             ],
             'resize_keyboard': True
         }
@@ -187,18 +120,15 @@ TEXTS = {
 🧪 *Dilution* : Préparation de dilutions
 ⚙️ *Paramètres* : Configuration du bot
 🔄 *Langue* : Changer la langue
-📺 *IPTV* : Regarder des chaînes TV
 
 *Commandes rapides* :
 /start - Démarrer le bot
 /help - Afficher l'aide
 /calc - Calcul réticulocytes
 /plaquettes - Calcul plaquettes
-/dilution - Préparation dilution
-/iptv - Liste des chaînes IPTV""",
+/dilution - Préparation dilution""",
         'settings': "⚙️ *Paramètres* :\n- Langue: Français\n- Historique: Activé",
-        'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}",
-        'iptv_welcome': "📺 Bienvenue dans la section IPTV!\nUtilisez /list pour afficher les chaînes disponibles."
+        'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}"
     },
     'en': {
         'welcome': "👋 Hello! I'm your laboratory assistant.\nChoose an option:",
@@ -223,18 +153,15 @@ TEXTS = {
 🧪 *Dilution* : Dilution preparation
 ⚙️ *Settings* : Bot configuration
 🔄 *Language* : Change language
-📺 *IPTV* : Watch TV channels
 
 *Quick commands* :
 /start - Start bot
 /help - Show help
 /calc - Calculate reticulocytes
 /plaquettes - Calculate platelets
-/dilution - Prepare dilution
-/iptv - List IPTV channels""",
+/dilution - Prepare dilution""",
         'settings': "⚙️ *Settings* :\n- Language: English\n- History: Enabled",
-        'stats': "📊 *Statistics* :\n- Calculations done: {}\n- Last calculation: {}",
-        'iptv_welcome': "📺 Welcome to the IPTV section!\nUse /list to show available channels."
+        'stats': "📊 *Statistics* :\n- Calculations done: {}\n- Last calculation: {}"
     },
     'ar': {
         'welcome': "👋 مرحبًا! أنا مساعدك في المختبر.\nاختر خيارًا:",
@@ -259,79 +186,20 @@ TEXTS = {
 🧪 *التخفيف* : تحضير المحاليل المخففة
 ⚙️ *الإعدادات* : تكوين البوت
 🔄 *اللغة* : تغيير اللغة
-📺 *IPTV* : مشاهدة القنوات التلفزيونية
 
 *أوامر سريعة* :
 /start - بدء البوت
 /help - عرض المساعدة
 /calc - حساب الخلايا الشبكية
 /plaquettes - حساب الصفائح الدموية
-/dilution - تحضير التخفيف
-/iptv - قائمة قنوات IPTV""",
+/dilution - تحضير التخفيف""",
         'settings': "⚙️ *الإعدادات* :\n- اللغة: العربية\n- السجل: مفعل",
-        'stats': "📊 *الإحصائيات* :\n- عدد العمليات الحسابية: {}\n- آخر عملية: {}",
-        'iptv_welcome': "📺 مرحبًا بك في قسم IPTV!\nاستخدم /list لعرض القنوات المتاحة."
+        'stats': "📊 *الإحصائيات* :\n- عدد العمليات الحسابية: {}\n- آخر عملية: {}"
     }
 }
 
-# ------------------- Telegram Handlers -------------------
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    lang = user_languages.get(chat_id, 'fr')
-    await update.message.reply_text(TEXTS[lang]['welcome'], reply_markup=get_main_keyboard(lang))
-
-async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    lang = user_languages.get(chat_id, 'fr')
-    await update.message.reply_text(TEXTS[lang]['help_text'], parse_mode='Markdown')
-
-async def iptv_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.message.chat_id
-    lang = user_languages.get(chat_id, 'fr')
-    await update.message.reply_text(TEXTS[lang]['iptv_welcome'])
-
-async def list_channels(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    try:
-        text = fetch_m3u(M3U_URL)
-        context.user_data["channels"] = parse_m3u(text)
-        if not context.user_data["channels"]:
-            await update.message.reply_text("❌ لم يتم العثور على قنوات.")
-            return
-        keyboard = build_keyboard(context.user_data["channels"], page=0)
-        await update.message.reply_text("اختر قناة:", reply_markup=keyboard)
-    except Exception as e:
-        await update.message.reply_text(f"❌ خطأ في تحميل القنوات: {str(e)}")
-
-async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    data = query.data
-
-    channels = context.user_data.get("channels", [])
-    if not channels:
-        return
-
-    if data.startswith("page:"):
-        page = int(data.split(":")[1])
-        kb = build_keyboard(channels, page)
-        await query.edit_message_reply_markup(reply_markup=kb)
-
-    elif data.startswith("play:"):
-        idx = int(data.split(":")[1])
-        title, url = channels[idx]
-
-        try:
-            # إرسال الفيديو مباشرة داخل تيليغرام
-            await query.message.reply_video(
-                video=url,
-                caption=f"🎬 {title}",
-                supports_streaming=True
-            )
-        except Exception as e:
-            await query.message.reply_text(f"❌ لم أستطع تشغيل القناة داخل تيليغرام.\n🔗 الرابط: {url}")
-
-# ------------------- Flask Routes -------------------
+# Statistiques
+calculations_history = []
 
 @app.route('/')
 def home():
@@ -364,9 +232,6 @@ def webhook():
         elif text == '/dilution' or text == '🧪 Dilution' or text == '🧪 التخفيف':
             send_message(chat_id, TEXTS[lang]['dilution_prompt'], get_dilution_keyboard(lang))
             user_states[chat_id] = {'step': 400, 'type': 'dilution'}
-        
-        elif text == '/iptv' or text == '📺 IPTV':
-            send_message(chat_id, TEXTS[lang]['iptv_welcome'], get_main_keyboard(lang))
         
         elif text == '⚙️ Paramètres' or text == '⚙️ Settings' or text == '⚙️ الإعدادات':
             send_message(chat_id, TEXTS[lang]['settings'], get_settings_keyboard(lang), parse_mode='Markdown')
@@ -611,31 +476,10 @@ def set_webhook():
     except requests.exceptions.RequestException as e:
         print(f"Error setting webhook: {e}")
 
-# ------------------- MAIN -------------------
-def main():
-    # Create Telegram application
-    app_bot = Application.builder().token(TELEGRAM_TOKEN).build()
-
-    # Add handlers
-    app_bot.add_handler(CommandHandler("start", start))
-    app_bot.add_handler(CommandHandler("help", help_command))
-    app_bot.add_handler(CommandHandler("iptv", iptv_start))
-    app_bot.add_handler(CommandHandler("list", list_channels))
-    app_bot.add_handler(CallbackQueryHandler(button_handler))
-
-    # Set webhook
+if __name__ == '__main__':
+    # تعيين الويب هوك عند التشغيل
     set_webhook()
     
-    # Start the bot in webhook mode
-    webhook_url = os.environ.get('WEBHOOK_URL') + '/webhook'
-    app_bot.run_webhook(
-        listen="0.0.0.0",
-        port=int(os.environ.get('PORT', 5000)),
-        url_path=TELEGRAM_TOKEN,
-        webhook_url=webhook_url
-    )
-
-if __name__ == '__main__':
-    # Run the Flask app
+    # تشغيل التطبيق
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
