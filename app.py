@@ -2,7 +2,7 @@ from flask import Flask, request, jsonify
 import requests
 import os
 from apscheduler.schedulers.background import BackgroundScheduler
-from datetime import datetime, timedelta
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -17,9 +17,7 @@ def send_message(chat_id, text):
     requests.post(url, json={"chat_id": chat_id, "text": text})
 
 def alarm_job(chat_id):
-    for _ in range(6):  # 6 مرات كل 5 ثواني => 30 ثانية
-        send_message(chat_id, "⏰ ALARME ! Le temps est écoulé.")
-        import time; time.sleep(5)
+    send_message(chat_id, "⏰ ALARME ! Il est l'heure !")
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -27,11 +25,23 @@ def webhook():
     if 'message' in data:
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
-        if text.isdigit():
-            delay = int(text)
-            run_time = datetime.now() + timedelta(seconds=delay)
+
+        # النص المفترض أن يكون بصيغة HH:MM
+        try:
+            alarm_time = datetime.strptime(text, "%H:%M")
+            now = datetime.now()
+            run_time = now.replace(hour=alarm_time.hour, minute=alarm_time.minute, second=0, microsecond=0)
+            
+            # إذا الوقت مضى اليوم، نبرمجه ليوم غد
+            if run_time < now:
+                from datetime import timedelta
+                run_time += timedelta(days=1)
+
             scheduler.add_job(alarm_job, 'date', run_date=run_time, args=[chat_id])
-            send_message(chat_id, f"✅ Minuteur réglé pour {delay} secondes !")
+            send_message(chat_id, f"✅ Alarme programmée pour {run_time.strftime('%H:%M')} !")
+        except ValueError:
+            send_message(chat_id, "⚠️ Format invalide. Utilisez HH:MM")
+            
     return jsonify({'status': 'ok'})
 
 if __name__ == '__main__':
