@@ -6,7 +6,7 @@ import re
 from datetime import datetime, timedelta
 import threading
 import time
-from typing import Dict, List, Any
+from typing import Dict, List, Any, Set
 
 app = Flask(__name__)
 
@@ -17,6 +17,7 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 user_states = {}
 user_languages = {}
 user_alarms = {}  # تخزين المنبهات للمستخدمين
+active_alarms = {}  # المنبهات النشطة التي ترن حالياً
 
 # إضافة متغير للتحقق من المنبهات
 alarm_check_thread = None
@@ -57,15 +58,23 @@ def get_main_keyboard(lang='fr'):
 
 def get_alarm_keyboard(lang='fr'):
     texts = {
-        'fr': ['➕ Nouvelle alarme', '🗑️ Supprimer alarme', '📋 Liste alarmes', '🔙 Retour'],
-        'en': ['➕ New alarm', '🗑️ Delete alarm', '📋 List alarms', '🔙 Back'],
-        'ar': ['➕ منبه جديد', '🗑️ حذف المنبه', '📋 قائمة المنبهات', '🔙 رجوع']
+        'fr': ['➕ Nouvelle alarme', '🗑️ Supprimer alarme', '📋 Liste alarmes', '🔙 Retour', '🔕 Arrêter alarme'],
+        'en': ['➕ New alarm', '🗑️ Delete alarm', '📋 List alarms', '🔙 Back', '🔕 Stop alarm'],
+        'ar': ['➕ منبه جديد', '🗑️ حذف المنبه', '📋 قائمة المنبهات', '🔙 رجوع', '🔕 إيقاف المنبه']
     }
     return {
         'keyboard': [
             [texts[lang][0], texts[lang][1]],
-            [texts[lang][2], texts[lang][3]]
+            [texts[lang][2], texts[lang][3]],
+            [texts[lang][4]]
         ],
+        'resize_keyboard': True
+    }
+
+def get_stop_alarm_keyboard(lang='fr'):
+    stop_text = {'fr': '🔕 Arrêter', 'en': '🔕 Stop', 'ar': '🔕 إيقاف'}
+    return {
+        'keyboard': [[stop_text[lang]]],
         'resize_keyboard': True
     }
 
@@ -168,7 +177,8 @@ TEXTS = {
 /plaquettes - Calcul plaquettes
 /dilution - Préparation dilution
 /time - Afficher l'heure actuelle
-/alarms - Gérer les alarmes""",
+/alarms - Gérer les alarmes
+/stop_alarm - Arrêter l'alarme active""",
         'settings': "⚙️ *Paramètres* :\n- Langue: Français\n- Historique: Activé",
         'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}",
         'current_time': "⏰ Heure actuelle: {}",
@@ -182,7 +192,10 @@ TEXTS = {
         'alarm_item': "• {} - {}\n",
         'select_alarm_to_delete': "Sélectionnez l'alarme à supprimer :",
         'invalid_time': "⚠️ Format d'heure invalide. Utilisez HH:MM",
-        'alarm_triggered': "🔔 ALARME: {}"
+        'alarm_triggered': "🔔 ALARME: {}",
+        'alarm_stopped': "✅ Alarme arrêtée",
+        'no_active_alarm': "ℹ️ Aucune alarme active à arrêter",
+        'alarm_ringing': "🔔🔔🔔 ALARME EN COURS: {} - Tapez /stop_alarm pour arrêter"
     },
     'en': {
         'welcome': "👋 Hello! I'm your laboratory assistant.\nChoose an option:",
@@ -217,7 +230,8 @@ TEXTS = {
 /plaquettes - Calculate platelets
 /dilution - Prepare dilution
 /time - Show current time
-/alarms - Manage alarms""",
+/alarms - Manage alarms
+/stop_alarm - Stop active alarm""",
         'settings': "⚙️ *Settings* :\n- Language: English\n- History: Enabled",
         'stats': "📊 *Statistics* :\n- Calculations done: {}\n- Last calculation: {}",
         'current_time': "⏰ Current time: {}",
@@ -231,7 +245,10 @@ TEXTS = {
         'alarm_item': "• {} - {}\n",
         'select_alarm_to_delete': "Select the alarm to delete:",
         'invalid_time': "⚠️ Invalid time format. Use HH:MM",
-        'alarm_triggered': "🔔 ALARM: {}"
+        'alarm_triggered': "🔔 ALARM: {}",
+        'alarm_stopped': "✅ Alarm stopped",
+        'no_active_alarm': "ℹ️ No active alarm to stop",
+        'alarm_ringing': "🔔🔔🔔 ALARM RINGING: {} - Type /stop_alarm to stop"
     },
     'ar': {
         'welcome': "👋 مرحبًا! أنا مساعدك في المختبر.\nاختر خيارًا:",
@@ -266,7 +283,8 @@ TEXTS = {
 /plaquettes - حساب الصفائح الدموية
 /dilution - تحضير التخفيف
 /time - عرض الوقت الحالي
-/alarms - إدارة المنبهات""",
+/alarms - إدارة المنبهات
+/stop_alarm - إيقاف المنبه النشط""",
         'settings': "⚙️ *الإعدادات* :\n- اللغة: العربية\n- السجل: مفعل",
         'stats': "📊 *الإحصائيات* :\n- عدد العمليات الحسابية: {}\n- آخر عملية: {}",
         'current_time': "⏰ الوقت الحالي: {}",
@@ -280,7 +298,10 @@ TEXTS = {
         'alarm_item': "• {} - {}\n",
         'select_alarm_to_delete': "اختر المنبه الذي تريد حذفه:",
         'invalid_time': "⚠️ تنسيق وقت غير صحيح. استخدم س:د",
-        'alarm_triggered': "🔔 منبه: {}"
+        'alarm_triggered': "🔔 منبه: {}",
+        'alarm_stopped': "✅ تم إيقاف المنبه",
+        'no_active_alarm': "ℹ️ لا يوجد منبه نشط لإيقافه",
+        'alarm_ringing': "🔔🔔🔔 منبه نشط: {} - اكتب /stop_alarm للإيقاف"
     }
 }
 
@@ -294,16 +315,47 @@ def check_alarms():
             current_time = datetime.now().strftime("%H:%M")
             for chat_id, alarms in list(user_alarms.items()):
                 for alarm_name, alarm_time in list(alarms.items()):
-                    if alarm_time == current_time:
+                    if alarm_time == current_time and chat_id not in active_alarms:
+                        # بدء المنبه
+                        active_alarms[chat_id] = {
+                            'name': alarm_name,
+                            'start_time': datetime.now(),
+                            'stop_requested': False
+                        }
+                        
                         lang = user_languages.get(chat_id, 'fr')
                         message = TEXTS[lang]['alarm_triggered'].format(alarm_name)
-                        send_message(chat_id, message, get_main_keyboard(lang))
-                        # إزالة المنبه بعد تشغيله (للتشغيل لمرة واحدة)
-                        del user_alarms[chat_id][alarm_name]
+                        send_message(chat_id, message, get_stop_alarm_keyboard(lang))
+                        
+                        # بدء الخيط الذي سيرسل إشعارات متكررة
+                        alarm_thread = threading.Thread(target=ring_alarm, args=(chat_id, alarm_name, lang))
+                        alarm_thread.daemon = True
+                        alarm_thread.start()
+            
             time.sleep(30)  # التحقق كل 30 ثانية
         except Exception as e:
             print(f"Error in alarm check: {e}")
             time.sleep(60)
+
+# وظيفة لجعل المنبه يرن بشكل متكرر
+def ring_alarm(chat_id, alarm_name, lang):
+    try:
+        while (chat_id in active_alarms and 
+               not active_alarms[chat_id].get('stop_requested', False) and
+               (datetime.now() - active_alarms[chat_id]['start_time']).seconds < 300):  # الحد الأقصى 5 دقائق
+            
+            message = TEXTS[lang]['alarm_ringing'].format(alarm_name)
+            send_message(chat_id, message, get_stop_alarm_keyboard(lang))
+            time.sleep(10)  # إرسال إشعار كل 10 ثواني
+        
+        # تنظيف بعد إيقاف المنبه
+        if chat_id in active_alarms:
+            del active_alarms[chat_id]
+            
+    except Exception as e:
+        print(f"Error in ring_alarm: {e}")
+        if chat_id in active_alarms:
+            del active_alarms[chat_id]
 
 # بدء التحقق من المنبهات عند تشغيل التطبيق
 alarm_check_thread = threading.Thread(target=check_alarms)
@@ -373,6 +425,15 @@ def webhook():
         elif text == '/alarms' or text == '🔔 Mes Alarmes' or text == '🔔 My Alarms' or text == '🔔 منبهاتي':
             send_message(chat_id, TEXTS[lang]['alarm_menu'], get_alarm_keyboard(lang), parse_mode='Markdown')
             user_states[chat_id] = {'step': 500, 'type': 'alarms'}
+        
+        # إضافة أمر إيقاف المنبه
+        elif text == '/stop_alarm' or text == '🔕 Arrêter alarme' or text == '🔕 Stop alarm' or text == '🔕 إيقاف المنبه':
+            if chat_id in active_alarms:
+                active_alarms[chat_id]['stop_requested'] = True
+                send_message(chat_id, TEXTS[lang]['alarm_stopped'], get_main_keyboard(lang))
+                del active_alarms[chat_id]
+            else:
+                send_message(chat_id, TEXTS[lang]['no_active_alarm'], get_main_keyboard(lang))
         
         elif text.lower() in ['annuler', 'cancel', 'إلغاء']:
             send_message(chat_id, TEXTS[lang]['cancel'], get_main_keyboard(lang))
