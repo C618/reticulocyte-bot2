@@ -3,3 +3,4 @@ requests==2.31.0
 yt-dlp==2023.11.16
 pyTelegramBotAPI
 requests
+APScheduler==3.10.4
