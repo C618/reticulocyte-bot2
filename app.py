@@ -581,63 +581,44 @@ def send_welcome_end(chat_id, lang='fr'):
     message = {
         'fr': "✅ Calcul terminé !\nChoisissez une autre option :",
         'en': "✅ Calculation completed!\nChoose another option:",
-        'ar': "✅ اكتمل الحساب!\nاختر خيارًا
-        # استمرار الكود بعد الجزء الموجود
+        'ar': "✅ اكتمل الحساب!\nاختر خيارًا آخر:"
+    }
+    send_message(chat_id, message.get(lang, "✅ Done!"), get_main_keyboard(lang))
+
+# -------------------- Envoi des messages --------------------
 
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
     data = {
-        "chat_id": chat_id,
+        "chat_id": chat_id, 
         "text": text
     }
+    
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
+    
     if parse_mode:
         data["parse_mode"] = parse_mode
-        
+    
     try:
-        response = requests.post(url, json=data)
-        return response.json()
-    except Exception as e:
-        print(f"Error sending message: {e}")
-        return None
+        requests.post(url, json=data, timeout=10)
+    except requests.exceptions.RequestException:
+        pass 
 
-def send_welcome_start(chat_id, lang='fr'):
-    send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
-
-def send_welcome_end(chat_id, lang='fr'):
-    message = {
-        'fr': "✅ Calcul terminé !\nChoisissez une autre option :",
-        'en': "✅ Calculation completed!\nChoose another option:",
-        'ar': "✅ اكتمل الحساب!\nاختر خيارًا آخر:"
-    }
-    send_message(chat_id, message.get(lang, message['fr']), get_main_keyboard(lang))
-
-# معالجة الأخطاء والاستثناءات
-@app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    return jsonify({'error': 'Internal server error'}), 500
-
-# تنظيف الجلسات القديمة (للمحافظة على الذاكرة)
-def cleanup_old_sessions():
-    global user_states
-    now = datetime.now()
-    # نحذف الجلسات الأقدم من ساعة
-    for chat_id in list(user_states.keys()):
-        if 'last_activity' in user_states[chat_id]:
-            last_activity = user_states[chat_id]['last_activity']
-            if (now - last_activity).total_seconds() > 3600:  # 1 ساعة
-                del user_states[chat_id]
-
-# جدولة تنظيف الجلسات كل 30 دقيقة
-scheduler.add_job(cleanup_old_sessions, 'interval', minutes=30)
+def set_webhook():
+    """تعيين الويب هوك للبوت"""
+    webhook_url = os.environ.get('WEBHOOK_URL') + '/webhook'
+    url = f"{TELEGRAM_API_URL}/setWebhook?url={webhook_url}"
+    try:
+        response = requests.get(url)
+        print(f"Webhook set: {response.json()}")
+    except requests.exceptions.RequestException as e:
+        print(f"Error setting webhook: {e}")
 
 if __name__ == '__main__':
-    # التشغيل في بيئة الإنتاج
+    # تعيين الويب هوك عند التشغيل
+    set_webhook()
+    
+    # تشغيل التطبيق
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
