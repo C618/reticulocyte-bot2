@@ -1,11 +1,12 @@
-from flask import Flask,request, jsonify
+from flask import Flask, request, jsonify
 import requests
 import os
 import json
 import re
-from datetime import datetime
-from apscheduler.schedulers.background import BackgroundScheduler
-import pytz
+from datetime import datetime, timedelta
+import threading
+import time
+from typing import Dict, List, Any
 
 app = Flask(__name__)
 
@@ -13,140 +14,243 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# Dictionnaires pour stocker l'état des utilisateurs et les alarmes
 user_states = {}
 user_languages = {}
-user_alarms = {}
+user_alarms = {}  # تخزين المنبهات للمستخدمين
+active_alarms = {}  # المنبهات النشطة التي ترن حالياً
 
-# Initialisation du planificateur pour les alarmes
-scheduler = BackgroundScheduler(timezone=pytz.timezone('Europe/Paris')) # Ajustez la timezone si nécessaire
-scheduler.start()
+# إضافة متغير للتحقق من المنبهات
+alarm_check_thread = None
+alarm_check_running = True
 
 # Définition des claviers
-
-def get_main_keyboard(lang='fr'):
+def get_main_keyboard(lang='en'):
     keyboards = {
-        'fr': {
+        'en': {
             'keyboard': [
-                ['🔢 Réticulocytes', '🩸 Plaquettes'],
-                ['🧪 Dilution', '⏰ Horloge & Alarme'],
-                ['⚙️ Paramètres', 'ℹ️ Aide']
+                ['⏰ Current Time', '🔔 My Alarms'],
+                ['⚙️ Settings', '🔄 Language']
+            ],
+            'resize_keyboard': True
+        },
+        'ar': {
+            'keyboard': [
+                ['⏰ الوقت الحالي', '🔔 منبهاتي'],
+                ['⚙️ الإعدادات', '🔄 اللغة']
             ],
             'resize_keyboard': True
         }
     }
-    return keyboards.get(lang, keyboards['fr'])
+    return keyboards.get(lang, keyboards['en'])
 
-def get_numeric_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler'}
+def get_alarm_keyboard(lang='en'):
+    texts = {
+        'en': ['➕ New alarm', '🗑️ Delete alarm', '📋 List alarms', '🔙 Back', '🔕 Stop alarm'],
+        'ar': ['➕ منبه جديد', '🗑️ حذف المنبه', '📋 قائمة المنبهات', '🔙 رجوع', '🔕 إيقاف المنبه']
+    }
     return {
         'keyboard': [
-            ['1', '2', '3', '4', '5'],
-            ['6', '7', '8', '9', '10'],
-            ['15', '20', '25', '30', '50'],
-            [cancel_text[lang]]
+            [texts[lang][0], texts[lang][1]],
+            [texts[lang][2], texts[lang][3]],
+            [texts[lang][4]]
         ],
         'resize_keyboard': True
     }
 
-def get_dilution_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler'}
+def get_stop_alarm_keyboard(lang='en'):
+    stop_text = {'en': '🔕 Stop', 'ar': '🔕 إيقاف'}
     return {
-        'keyboard': [
-            ['1/2', '1/5', '1/10'],
-            ['1/20', '1/50', '1/100'],
-            ['1/200', '1/500', '1/1000'],
-            [cancel_text[lang]]
-        ],
+        'keyboard': [[stop_text[lang]]],
         'resize_keyboard': True
     }
 
-def get_cancel_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler'}
+def get_cancel_keyboard(lang='en'):
+    cancel_text = {'en': 'Cancel', 'ar': 'إلغاء'}
     return {
         'keyboard': [[cancel_text[lang]]],
+        'resize_keyboard': True
+    }
+
+def get_time_selection_keyboard(lang='en'):
+    cancel_text = {'en': 'Cancel', 'ar': 'إلغاء'}
+    return {
+        'keyboard': [
+            ['00', '01', '02', '03', '04', '05'],
+            ['06', '07', '08', '09', '10', '11'],
+            ['12', '13', '14', '15', '16', '17'],
+            ['18', '19', '20', '21', '22', '23'],
+            ['00', '15', '30', '45', cancel_text[lang]]
+        ],
         'resize_keyboard': True
     }
 
 def get_language_keyboard():
     return {
         'keyboard': [
-            ['🇫🇷 Français', '🔙 Retour']
+            ['🇬🇧 English', '🇸🇦 العربية'],
+            ['🔙 Back']
         ],
         'resize_keyboard': True
     }
 
-def get_settings_keyboard(lang='fr'):
+def get_settings_keyboard(lang='en'):
     texts = {
-        'fr': ['🔙 Retour', '🗑️ Effacer historique', '📊 Statistiques']
+        'en': ['🔙 Back', '🗑️ Clear all alarms'],
+        'ar': ['🔙 رجوع', '🗑️ مسح جميع المنبهات']
     }
     return {
-        'keyboard': [[texts[lang][0]], [texts[lang][1]], [texts[lang][2]]],
-        'resize_keyboard': True
-    }
-
-def get_clock_keyboard(lang='fr'):
-    texts = {
-        'fr': ['➕ Ajouter une alarme', '🗑️ Supprimer une alarme', '📜 Mes alarmes', '🔙 Retour']
-    }
-    return {
-        'keyboard': [
-            [texts[lang][0]],
-            [texts[lang][1]],
-            [texts[lang][2]],
-            [texts[lang][3]]
-        ],
+        'keyboard': [[texts[lang][0]], [texts[lang][1]]],
         'resize_keyboard': True
     }
 
 # Textes multilingues
-
 TEXTS = {
-    'fr': {
-        'welcome': "👋 Bonjour ! Je suis votre assistant de laboratoire.\nChoisissez une option :",
-        'reti_fields': "🔢 Combien de champs voulez-vous analyser pour les réticulocytes ?",
-        'plaq_fields': "🩸 Combien de champs voulez-vous analyser pour les plaquettes ?",
-        'dilution_prompt': "🧪 Entrez la dilution souhaitée (ex: 1/2, 1/10) :",
-        'reti_count': "Entrez le nombre de réticulocytes dans le Champ {} :",
-        'plaq_count': "Entrez le nombre de plaquettes dans le Champ {} :",
-        'rbc_quarter': "Entrez le nombre de globules rouges dans le quart de Champ {} :",
-        'gr_auto': "⚙️ Entrez le nombre de globules rouges auto (machine) :",
-        'cancel': "❌ Opération annulée.",
-        'invalid_number': "⚠️ Veuillez entrer un nombre valide.",
-        'result_reti': "--- Résultat Réticulocytes ---\nTotal réticulocytes: {}\nMoyenne GR: {:.2f}\nTaux: {:.2f}%",
-        'result_plaq': "--- Résultat Plaquettes ---\nMoyenne plaquettes: {:.2f}\nMoyenne GR: {:.2f}\nGR auto: {}\nRésultat: {:.2f}",
-        'dilution_result': "🧪 Pour une dilution {}/{} :\n- Substance: {} partie(s)\n- Diluant: {} partie(s)",
-        'quantity_prompt': "Entrez la quantité totale souhaitée :",
-        'exact_volumes': "📊 Pour {} unité(s) :\n- Substance: {:.2f}\n- Diluant: {:.2f}",
-        'help_text': """ℹ️ AIDE - Commandes disponibles
-🔢 Réticulocytes : Calcul du taux de réticulocytes
-🩸Plaquettes : Calcul du nombre de plaquettes
-🧪Dilution : Préparation de dilutions
-⏰ Horloge & Alarme: Gérer vos alarmes
-⚙️Paramètres : Configuration du bot
-🔄Langue : Changer la langue
-Commandes rapides : /start- Démarrer le bot /help- Afficher l'aide /calc- Calcul réticulocytes /plaquettes- Calcul plaquettes /dilution- Préparation dilution""",
-        'settings': "⚙️ Paramètres :\n- Langue: Français\n- Historique: Activé",
-        'stats': "📊 Statistiques :\n- Calculs effectués: {}\n- Dernier calcul: {}",
-        'clock_menu': "⏰ Bienvenue dans le menu Horloge et Alarme.\nChoisissez une option :",
-        'add_alarm_prompt': "➕ Entrez l'heure de l'alarme (ex: 14:30) et un nom (ex: 'réunion'):\n14:30 réunion",
-        'alarm_added': "✅ Alarme '{name}' ajoutée pour {time}.",
-        'alarm_list': "📜 Vos alarmes actuelles:\n{alarms}",
-        'no_alarms': "📜 Vous n'avez pas d'alarmes actives pour le moment.",
-        'alarm_trigger': "🔔 **ALARM:** {name}",
-        'alarm_deleted': "🗑️ L'alarme '{name}' a été supprimée.",
-        'alarm_not_found': "⚠️ Aucune alarme trouvée avec ce nom.",
-        'delete_alarm_prompt': "🗑️ Entrez le nom de l'alarme à supprimer:",
-        'invalid_alarm_format': "⚠️ Format d'alarme invalide. Veuillez utiliser 'HH:MM nom_alarme'."
+    'en': {
+        'welcome': "⏰ Welcome to your Alarm Bot!\nChoose an option:",
+        'cancel': "❌ Operation cancelled.",
+        'invalid_number': "⚠️ Please enter a valid number.",
+        'help_text': """🔔 *ALARM BOT - Available commands*
+
+⏰ *Current Time* : Show current time
+🔔 *My Alarms* : Manage your alarms
+⚙️ *Settings* : Bot configuration
+🔄 *Language* : Change language
+
+*Quick commands* :
+/start - Start bot
+/help - Show help
+/time - Show current time
+/alarms - Manage alarms
+/stop_alarm - Stop active alarm""",
+        'settings': "⚙️ *Settings* :\n- Language: English\n- Active alarms: {}",
+        'current_time': "⏰ Current time: {}",
+        'alarm_menu': "🔔 *Alarm Management* :\nChoose an option:",
+        'new_alarm_name': "Enter a name for your new alarm:",
+        'new_alarm_time': "Enter the time for the alarm (HH:MM format):",
+        'alarm_added': "✅ Alarm '{}' set for {}",
+        'alarm_deleted': "✅ Alarm '{}' deleted",
+        'no_alarms': "📭 You have no alarms set",
+        'alarm_list': "📋 Your alarms:\n{}",
+        'alarm_item': "• {} - {}\n",
+        'select_alarm_to_delete': "Select the alarm to delete:",
+        'invalid_time': "⚠️ Invalid time format. Use HH:MM (24h format)",
+        'alarm_triggered': "🔔 ALARM: {}",
+        'alarm_stopped': "✅ Alarm stopped",
+        'no_active_alarm': "ℹ️ No active alarm to stop",
+        'alarm_ringing': "🔔🔔🔔 ALARM RINGING: {} - Type /stop_alarm to stop",
+        'all_alarms_cleared': "✅ All alarms have been cleared",
+        'confirm_clear_all': "⚠️ Are you sure you want to delete ALL alarms? This cannot be undone. Type 'YES' to confirm:"
+    },
+    'ar': {
+        'welcome': "⏰ مرحبًا بك في بوت المنبهات!\nاختر خيارًا:",
+        'cancel': "❌ تم إلغاء العملية.",
+        'invalid_number': "⚠️ الرجاء إدخال رقم صحيح.",
+        'help_text': """🔔 *بوت المنبهات - الأوامر المتاحة*
+
+⏰ *الوقت الحالي* : عرض الوقت الحالي
+🔔 *منبهاتي* : إدارة المنبهات
+⚙️ *الإعدادات* : تكوين البوت
+🔄 *اللغة* : تغيير اللغة
+
+*أوامر سريعة* :
+/start - بدء البوت
+/help - عرض المساعدة
+/time - عرض الوقت الحالي
+/alarms - إدارة المنبهات
+/stop_alarm - إيقاف المنبه النشط""",
+        'settings': "⚙️ *الإعدادات* :\n- اللغة: العربية\n- المنبهات النشطة: {}",
+        'current_time': "⏰ الوقت الحالي: {}",
+        'alarm_menu': "🔔 *إدارة المنبهات* :\nاختر خيارًا:",
+        'new_alarm_name': "أدخل اسمًا للمنبه الجديد:",
+        'new_alarm_time': "أدخل وقت المنبه (صيغة س:د):",
+        'alarm_added': "✅ تم ضبط المنبه '{}' لـ {}",
+        'alarm_deleted': "✅ تم حذف المنبه '{}'",
+        'no_alarms': "📭 ليس لديك أي منبهات مضبوطة",
+        'alarm_list': "📋 منبهاتك:\n{}",
+        'alarm_item': "• {} - {}\n",
+        'select_alarm_to_delete': "اختر المنبه الذي تريد حذفه:",
+        'invalid_time': "⚠️ تنسيق وقت غير صحيح. استخدم س:د (توقيت 24 ساعة)",
+        'alarm_triggered': "🔔 منبه: {}",
+        'alarm_stopped': "✅ تم إيقاف المنبه",
+        'no_active_alarm': "ℹ️ لا يوجد منبه نشط لإيقافه",
+        'alarm_ringing': "🔔🔔🔔 منبه نشط: {} - اكتب /stop_alarm للإيقاف",
+        'all_alarms_cleared': "✅ تم مسح جميع المنبهات",
+        'confirm_clear_all': "⚠️ هل أنت متأكد أنك تريد حذف جميع المنبهات؟ لا يمكن التراجع عن هذا الإجراء. اكتب 'نعم' للتأكيد:"
     }
 }
 
-# Statistiques
-calculations_history = []
+# وظيفة للتحقق من المنبهات
+def check_alarms():
+    while alarm_check_running:
+        try:
+            current_time = datetime.now().strftime("%H:%M")
+            current_date = datetime.now().strftime("%Y-%m-%d")
+            
+            for chat_id, alarms in list(user_alarms.items()):
+                for alarm_name, alarm_data in list(alarms.items()):
+                    alarm_time = alarm_data['time']
+                    last_triggered = alarm_data.get('last_triggered', '')
+                    
+                    # التحقق إذا حان وقت المنبه ولم يتم تشغيله اليوم
+                    if (alarm_time == current_time and 
+                        last_triggered != current_date and
+                        chat_id not in active_alarms):
+                        
+                        # تحديث وقت التشغيل الأخير
+                        user_alarms[chat_id][alarm_name]['last_triggered'] = current_date
+                        
+                        # بدء المنبه
+                        active_alarms[chat_id] = {
+                            'name': alarm_name,
+                            'start_time': datetime.now(),
+                            'stop_requested': False
+                        }
+                        
+                        lang = user_languages.get(chat_id, 'en')
+                        message = TEXTS[lang]['alarm_triggered'].format(alarm_name)
+                        send_message(chat_id, message, get_stop_alarm_keyboard(lang))
+                        
+                        # بدء الخيط الذي سيرسل إشعارات متكررة
+                        alarm_thread = threading.Thread(target=ring_alarm, args=(chat_id, alarm_name, lang))
+                        alarm_thread.daemon = True
+                        alarm_thread.start()
+            
+            time.sleep(10)  # التحقق كل 10 ثواني للدقة
+        except Exception as e:
+            print(f"Error in alarm check: {e}")
+            time.sleep(30)
+
+# وظيفة لجعل المنبه يرن بشكل متكرر
+def ring_alarm(chat_id, alarm_name, lang):
+    try:
+        start_time = datetime.now()
+        max_duration = 300  # الحد الأقصى 5 دقائق
+        
+        while (chat_id in active_alarms and 
+               not active_alarms[chat_id].get('stop_requested', False) and
+               (datetime.now() - start_time).seconds < max_duration):
+            
+            message = TEXTS[lang]['alarm_ringing'].format(alarm_name)
+            send_message(chat_id, message, get_stop_alarm_keyboard(lang))
+            time.sleep(15)  # إرسال إشعار كل 15 ثانية
+        
+        # تنظيف بعد إيقاف المنبه
+        if chat_id in active_alarms:
+            del active_alarms[chat_id]
+            
+    except Exception as e:
+        print(f"Error in ring_alarm: {e}")
+        if chat_id in active_alarms:
+            del active_alarms[chat_id]
+
+# بدء التحقق من المنبهات عند تشغيل التطبيق
+alarm_check_thread = threading.Thread(target=check_alarms)
+alarm_check_thread.daemon = True
+alarm_check_thread.start()
 
 @app.route('/')
 def home():
-    return "Le bot fonctionne correctement !"
+    return "Alarm Bot is running correctly!"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -154,310 +258,208 @@ def webhook():
     if 'message' in data:
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
-        lang = user_languages.get(chat_id, 'fr')
-        handle_input(chat_id, text, lang)
-    return jsonify({"status": "ok"})
+        lang = user_languages.get(chat_id, 'en')
 
-# Fonctions d'alarme
+        # Gestion des commandes textuelles et boutons
+        if text == '/start' or text == '🔙 Back' or text == '🔙 رجوع':
+            send_welcome_start(chat_id, lang)
+            user_states[chat_id] = {'step': 0}
+        
+        elif text == '/help' or text == 'ℹ️ Help' or text == 'ℹ️ المساعدة':
+            send_message(chat_id, TEXTS[lang]['help_text'], get_main_keyboard(lang), parse_mode='Markdown')
+        
+        elif text == '⚙️ Settings' or text == '⚙️ الإعدادات':
+            active_count = sum(1 for chat in active_alarms.values() if not chat.get('stop_requested', False))
+            settings_text = TEXTS[lang]['settings'].format(active_count)
+            send_message(chat_id, settings_text, get_settings_keyboard(lang), parse_mode='Markdown')
+            user_states[chat_id] = {'step': 600, 'type': 'settings'}
+        
+        elif text == '🔄 Language' or text == '🔄 اللغة':
+            send_message(chat_id, "🌍 Choose your language / اختر لغتك:", get_language_keyboard())
+        
+        elif text == '🇬🇧 English':
+            user_languages[chat_id] = 'en'
+            send_message(chat_id, "✅ Language changed to English", get_main_keyboard('en'))
+        
+        elif text == '🇸🇦 العربية':
+            user_languages[chat_id] = 'ar'
+            send_message(chat_id, "✅ تم تغيير اللغة إلى العربية", get_main_keyboard('ar'))
+        
+        # إضافة أوامر الساعة والمنبهات
+        elif text == '/time' or text == '⏰ Current Time' or text == '⏰ الوقت الحالي':
+            current_time = datetime.now().strftime("%H:%M:%S")
+            send_message(chat_id, TEXTS[lang]['current_time'].format(current_time), get_main_keyboard(lang))
+        
+        elif text == '/alarms' or text == '🔔 My Alarms' or text == '🔔 منبهاتي':
+            send_message(chat_id, TEXTS[lang]['alarm_menu'], get_alarm_keyboard(lang), parse_mode='Markdown')
+            user_states[chat_id] = {'step': 500, 'type': 'alarms'}
+        
+        # إضافة أمر إيقاف المنبه
+        elif text == '/stop_alarm' or text == '🔕 Stop alarm' or text == '🔕 إيقاف المنبه':
+            if chat_id in active_alarms:
+                active_alarms[chat_id]['stop_requested'] = True
+                send_message(chat_id, TEXTS[lang]['alarm_stopped'], get_main_keyboard(lang))
+                del active_alarms[chat_id]
+            else:
+                send_message(chat_id, TEXTS[lang]['no_active_alarm'], get_main_keyboard(lang))
+        
+        elif text.lower() in ['cancel', 'إلغاء']:
+            send_message(chat_id, TEXTS[lang]['cancel'], get_main_keyboard(lang))
+            user_states[chat_id] = {'step': 0}
+        
+        elif chat_id in user_states:
+            handle_input(chat_id, text, lang)
+        else:
+            # إذا لم يكن هناك حالة، نعرض القائمة الرئيسية
+            send_welcome_start(chat_id, lang)
+            user_states[chat_id] = {'step': 0}
+    
+    return jsonify({'status': 'ok'})
 
-def add_alarm(chat_id, time_str, name):
-    try:
-        # Vérifier le format de l'heure
-        if not re.match(r'^\d{2}:\d{2}$', time_str):
-            raise ValueError
-        
-        time_obj = datetime.strptime(time_str, '%H:%M').time()
-        
-        # Déterminer la prochaine heure de déclenchement
-        now = datetime.now()
-        run_date = now.replace(hour=time_obj.hour, minute=time_obj.minute, second=0, microsecond=0)
-        
-        if run_date < now:
-            run_date = run_date + pytz.utc.localize(datetime.timedelta(days=1))
-        
-        # Planifier la tâche d'alarme
-        job_id = f"alarm_{chat_id}_{name}"
-        scheduler.add_job(
-            send_message,
-            'date',
-            run_date=run_date,
-            id=job_id,
-            args=[chat_id, TEXTS['fr']['alarm_trigger'].format(name=name), None, 'Markdown']
-        )
-        
-        # Stocker les détails de l'alarme
-        if chat_id not in user_alarms:
-            user_alarms[chat_id] = {}
-        user_alarms[chat_id][name] = {
-            'time': time_str,
-            'job_id': job_id
-        }
-        return True
-    except (ValueError, KeyError) as e:
-        return False
-
-def delete_alarm(chat_id, name):
-    if chat_id in user_alarms and name in user_alarms[chat_id]:
-        job_id = user_alarms[chat_id][name]['job_id']
-        try:
-            scheduler.remove_job(job_id)
-            del user_alarms[chat_id][name]
-            return True
-        except Exception as e:
-            print(f"Erreur lors de la suppression de la tâche : {e}")
-            return False
-    return False
-
-# Gestion des inputs
+# -------------------- Gestion des inputs --------------------
 
 def handle_input(chat_id, text, lang):
-    state = user_states.get(chat_id)
-    
-    if text == '⏰ Horloge & Alarme':
-        user_states[chat_id] = 'CLOCK_MENU'
-        send_message(chat_id, TEXTS[lang]['clock_menu'], get_clock_keyboard(lang))
-        return
-    
-    if text == '➕ Ajouter une alarme' and state == 'CLOCK_MENU':
-        user_states[chat_id] = 'ADD_ALARM_PROMPT'
-        send_message(chat_id, TEXTS[lang]['add_alarm_prompt'], get_cancel_keyboard(lang))
-        return
-    
-    if text == '🗑️ Supprimer une alarme' and state == 'CLOCK_MENU':
-        user_states[chat_id] = 'DELETE_ALARM_PROMPT'
-        send_message(chat_id, TEXTS[lang]['delete_alarm_prompt'], get_cancel_keyboard(lang))
-        return
-    
-    if text == '📜 Mes alarmes' and state == 'CLOCK_MENU':
-        alarm_list = user_alarms.get(chat_id, {})
-        if alarm_list:
-            alarms_text = '\n'.join([f"- **{name}**: {details['time']}" for name, details in alarm_list.items()])
-            send_message(chat_id, TEXTS[lang]['alarm_list'].format(alarms=alarms_text), get_clock_keyboard(lang), 'Markdown')
+    state = user_states[chat_id]
+
+    try:
+        if state.get('type') == 'alarms':
+            handle_alarms(chat_id, text, lang)
+        elif state.get('type') == 'settings':
+            handle_settings(chat_id, text, lang)
         else:
-            send_message(chat_id, TEXTS[lang]['no_alarms'], get_clock_keyboard(lang))
-        return
-
-    if state == 'ADD_ALARM_PROMPT':
-        match = re.match(r'(\d{2}:\d{2})\s(.+)', text)
-        if match:
-            time_str, name = match.groups()
-            if add_alarm(chat_id, time_str, name):
-                send_message(chat_id, TEXTS[lang]['alarm_added'].format(name=name, time=time_str), get_clock_keyboard(lang))
-                user_states[chat_id] = 'CLOCK_MENU'
+            # إذا كان النص رقماً، معالجته كوقت
+            if re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', text):
+                handle_alarm_time(chat_id, text, lang)
             else:
-                send_message(chat_id, TEXTS[lang]['invalid_alarm_format'], get_cancel_keyboard(lang))
+                send_message(chat_id, TEXTS[lang]['invalid_time'], get_main_keyboard(lang))
+    
+    except ValueError:
+        send_message(chat_id, TEXTS[lang]['invalid_number'], get_main_keyboard(lang))
+
+# -------------------- Gestion des alarmes --------------------
+
+def handle_alarms(chat_id, text, lang):
+    state = user_states[chat_id]
+    
+    if text == '➕ New alarm' or text == '➕ منبه جديد':
+        send_message(chat_id, TEXTS[lang]['new_alarm_name'], get_cancel_keyboard(lang))
+        state['step'] = 501  # انتظار اسم المنبه
+    
+    elif text == '🗑️ Delete alarm' or text == '🗑️ حذف المنبه':
+        if chat_id not in user_alarms or not user_alarms[chat_id]:
+            send_message(chat_id, TEXTS[lang]['no_alarms'], get_alarm_keyboard(lang))
         else:
-            send_message(chat_id, TEXTS[lang]['invalid_alarm_format'], get_cancel_keyboard(lang))
-        return
+            alarm_list = "\n".join([f"{i+1}. {name} - {data['time']}" for i, (name, data) in enumerate(user_alarms[chat_id].items())])
+            send_message(chat_id, TEXTS[lang]['select_alarm_to_delete'] + "\n" + alarm_list, get_cancel_keyboard(lang))
+            state['step'] = 503  # انتظار اختيار المنبه للحذف
     
-    if state == 'DELETE_ALARM_PROMPT':
-        name = text.strip()
-        if delete_alarm(chat_id, name):
-            send_message(chat_id, TEXTS[lang]['alarm_deleted'].format(name=name), get_clock_keyboard(lang))
+    elif text == '📋 List alarms' or text == '📋 قائمة المنبهات':
+        if chat_id not in user_alarms or not user_alarms[chat_id]:
+            send_message(chat_id, TEXTS[lang]['no_alarms'], get_alarm_keyboard(lang))
         else:
-            send_message(chat_id, TEXTS[lang]['alarm_not_found'], get_cancel_keyboard(lang))
-        user_states[chat_id] = 'CLOCK_MENU'
-        return
-
-    # Gestion des messages de calcul
-    if text == '🔢 Réticulocytes' or text == '/calc':
-        user_states[chat_id] = 'RETI_FIELDS_PROMPT'
-        send_message(chat_id, TEXTS[lang]['reti_fields'], get_numeric_keyboard(lang))
-        return
+            alarm_list = ""
+            for name, data in user_alarms[chat_id].items():
+                alarm_list += TEXTS[lang]['alarm_item'].format(name, data['time'])
+            send_message(chat_id, TEXTS[lang]['alarm_list'].format(alarm_list), get_alarm_keyboard(lang))
     
-    if text == '🩸 Plaquettes' or text == '/plaquettes':
-        user_states[chat_id] = 'PLAQ_FIELDS_PROMPT'
-        send_message(chat_id, TEXTS[lang]['plaq_fields'], get_numeric_keyboard(lang))
-        return
+    elif state['step'] == 501:  # انتظار اسم المنبه
+        state['new_alarm_name'] = text
+        send_message(chat_id, TEXTS[lang]['new_alarm_time'], get_time_selection_keyboard(lang))
+        state['step'] = 502  # انتظار وقت المنبه
     
-    if text == '🧪 Dilution' or text == '/dilution':
-        user_states[chat_id] = 'DILUTION_PROMPT'
-        send_message(chat_id, TEXTS[lang]['dilution_prompt'], get_dilution_keyboard(lang))
-        return
-
-    if text == '⚙️ Paramètres':
-        user_states[chat_id] = 'SETTINGS_MENU'
-        send_message(chat_id, TEXTS[lang]['settings'], get_settings_keyboard(lang))
-        return
-
-    if text == 'ℹ️ Aide' or text == '/help':
-        send_message(chat_id, TEXTS[lang]['help_text'], get_main_keyboard(lang))
-        return
-
-    if text == '🔄 Langue':
-        user_states[chat_id] = 'SELECT_LANGUAGE'
-        send_message(chat_id, "Choisissez une langue:", get_language_keyboard())
-        return
-
-    if text == '🔙 Retour':
-        user_states[chat_id] = 'IDLE'
-        send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
-        return
-
-    if text == '🇫🇷 Français':
-        user_languages[chat_id] = 'fr'
-        user_states[chat_id] = 'IDLE'
-        send_message(chat_id, TEXTS['fr']['welcome'], get_main_keyboard('fr'))
-        return
-
-    if text == '🗑️ Effacer historique' and state == 'SETTINGS_MENU':
-        calculations_history.clear()
-        send_message(chat_id, "L'historique des calculs a été effacé.", get_settings_keyboard(lang))
-        return
-
-    if text == '📊 Statistiques' and state == 'SETTINGS_MENU':
-        stats_text = TEXTS[lang]['stats'].format(len(calculations_history), calculations_history[-1] if calculations_history else 'Aucun')
-        send_message(chat_id, stats_text, get_settings_keyboard(lang))
-        return
-
-    # Gérer les autres états (calculs)
-    if state == 'RETI_FIELDS_PROMPT':
+    elif state['step'] == 502:  # انتظار وقت المنبه
+        handle_alarm_time(chat_id, text, lang)
+    
+    elif state['step'] == 503:  # انتظار اختيار المنبه للحذف
         try:
-            num_fields = int(text)
-            if num_fields > 0:
-                user_states[chat_id] = 'RETI_INPUT_LOOP'
-                user_states[chat_id + '_fields'] = num_fields
-                user_states[chat_id + '_reti_counts'] = []
-                user_states[chat_id + '_rbc_counts'] = []
-                user_states[chat_id + '_current_field'] = 1
-                send_message(chat_id, TEXTS[lang]['reti_count'].format(1), get_cancel_keyboard(lang))
-            else:
-                send_message(chat_id, TEXTS[lang]['invalid_number'], get_numeric_keyboard(lang))
-        except ValueError:
-            send_message(chat_id, TEXTS[lang]['invalid_number'], get_numeric_keyboard(lang))
-        return
+            alarm_index = int(text) - 1
+            alarm_name = list(user_alarms[chat_id].keys())[alarm_index]
+            del user_alarms[chat_id][alarm_name]
+            send_message(chat_id, TEXTS[lang]['alarm_deleted'].format(alarm_name), get_alarm_keyboard(lang))
+            state['step'] = 500  # العودة إلى قائمة المنبهات
+        except (ValueError, IndexError):
+            send_message(chat_id, TEXTS[lang]['invalid_number'], get_alarm_keyboard(lang))
 
-    if state == 'RETI_INPUT_LOOP':
-        try:
-            value = float(text)
-            current_field = user_states[chat_id + '_current_field']
-            if current_field <= user_states[chat_id + '_fields']:
-                user_states[chat_id + '_reti_counts'].append(value)
-                send_message(chat_id, TEXTS[lang]['rbc_quarter'].format(current_field), get_cancel_keyboard(lang))
-                user_states[chat_id + '_current_field'] += 1
-            else:
-                user_states[chat_id + '_rbc_counts'].append(value)
-                total_reti = sum(user_states[chat_id + '_reti_counts'])
-                avg_rbc = (sum(user_states[chat_id + '_rbc_counts']) * 4) / user_states[chat_id + '_fields']
-                rate = (total_reti / (1000 * avg_rbc)) * 100
-                result_text = TEXTS[lang]['result_reti'].format(total_reti, avg_rbc, rate)
-                send_message(chat_id, result_text, get_main_keyboard(lang))
-                calculations_history.append({'type': 'reti', 'result': rate, 'timestamp': str(datetime.now())})
-                user_states[chat_id] = 'IDLE'
-        except ValueError:
-            send_message(chat_id, TEXTS[lang]['invalid_number'], get_cancel_keyboard(lang))
-        return
-
-    if state == 'PLAQ_FIELDS_PROMPT':
-        try:
-            num_fields = int(text)
-            if num_fields > 0:
-                user_states[chat_id] = 'PLAQ_INPUT_LOOP'
-                user_states[chat_id + '_fields'] = num_fields
-                user_states[chat_id + '_plaq_counts'] = []
-                user_states[chat_id + '_gr_auto'] = None
-                user_states[chat_id + '_current_field'] = 1
-                send_message(chat_id, TEXTS[lang]['plaq_count'].format(1), get_cancel_keyboard(lang))
-            else:
-                send_message(chat_id, TEXTS[lang]['invalid_number'], get_numeric_keyboard(lang))
-        except ValueError:
-            send_message(chat_id, TEXTS[lang]['invalid_number'], get_numeric_keyboard(lang))
-        return
-
-    if state == 'PLAQ_INPUT_LOOP':
-        try:
-            value = float(text)
-            if user_states[chat_id + '_gr_auto'] is None:
-                user_states[chat_id + '_plaq_counts'].append(value)
-                current_field = user_states[chat_id + '_current_field']
-                if current_field < user_states[chat_id + '_fields']:
-                    user_states[chat_id + '_current_field'] += 1
-                    send_message(chat_id, TEXTS[lang]['plaq_count'].format(current_field), get_cancel_keyboard(lang))
-                else:
-                    user_states[chat_id + '_gr_auto'] = True # Passer à l'étape suivante
-                    send_message(chat_id, TEXTS[lang]['gr_auto'], get_cancel_keyboard(lang))
-            else:
-                gr_auto = float(text)
-                avg_plaq = sum(user_states[chat_id + '_plaq_counts']) / user_states[chat_id + '_fields']
-                avg_gr = 200 * gr_auto / 1000000
-                result = (avg_plaq / avg_gr) * 1000
-                result_text = TEXTS[lang]['result_plaq'].format(avg_plaq, avg_gr, gr_auto, result)
-                send_message(chat_id, result_text, get_main_keyboard(lang))
-                calculations_history.append({'type': 'plaq', 'result': result, 'timestamp': str(datetime.now())})
-                user_states[chat_id] = 'IDLE'
-        except ValueError:
-            send_message(chat_id, TEXTS[lang]['invalid_number'], get_cancel_keyboard(lang))
-        return
-
-    if state == 'DILUTION_PROMPT':
-        try:
-            match = re.match(r'(\d+)/(\d+)', text)
-            if match:
-                numerator, denominator = int(match.group(1)), int(match.group(2))
-                parts_substance = numerator
-                parts_diluent = denominator - numerator
-                result_text = TEXTS[lang]['dilution_result'].format(numerator, denominator, parts_substance, parts_diluent)
-                send_message(chat_id, result_text, get_main_keyboard(lang))
-                user_states[chat_id] = 'IDLE'
-            else:
-                send_message(chat_id, TEXTS[lang]['invalid_number'], get_dilution_keyboard(lang))
-        except ValueError:
-            send_message(chat_id, TEXTS[lang]['invalid_number'], get_dilution_keyboard(lang))
-        return
-
-    # Gérer les autres commandes comme /start, /help, etc.
-    if text == '/start':
-        send_welcome_start(chat_id, lang)
-        user_states[chat_id] = 'IDLE'
-    elif text == '/help':
-        send_message(chat_id, TEXTS[lang]['help_text'], get_main_keyboard(lang))
-    elif text == '/calc':
-        user_states[chat_id] = 'RETI_FIELDS_PROMPT'
-        send_message(chat_id, TEXTS[lang]['reti_fields'], get_numeric_keyboard(lang))
-    elif text == '/plaquettes':
-        user_states[chat_id] = 'PLAQ_FIELDS_PROMPT'
-        send_message(chat_id, TEXTS[lang]['plaq_fields'], get_numeric_keyboard(lang))
-    elif text == '/dilution':
-        user_states[chat_id] = 'DILUTION_PROMPT'
-        send_message(chat_id, TEXTS[lang]['dilution_prompt'], get_dilution_keyboard(lang))
+def handle_alarm_time(chat_id, text, lang):
+    state = user_states[chat_id]
+    
+    # التحقق من صيغة الوقت
+    if re.match(r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$', text):
+        if chat_id not in user_alarms:
+            user_alarms[chat_id] = {}
+        
+        user_alarms[chat_id][state['new_alarm_name']] = {
+            'time': text,
+            'created': datetime.now().isoformat()
+        }
+        
+        send_message(chat_id, TEXTS[lang]['alarm_added'].format(state['new_alarm_name'], text), get_alarm_keyboard(lang))
+        state['step'] = 500  # العودة إلى قائمة المنبهات
     else:
-        # Gérer les entrées inconnues
-        pass
+        send_message(chat_id, TEXTS[lang]['invalid_time'], get_time_selection_keyboard(lang))
 
-# Envoi des messages
+# -------------------- Gestion des paramètres --------------------
+
+def handle_settings(chat_id, text, lang):
+    state = user_states[chat_id]
+    
+    if text == '🗑️ Clear all alarms' or text == '🗑️ مسح جميع المنبهات':
+        if 'confirm_clear' not in state:
+            send_message(chat_id, TEXTS[lang]['confirm_clear_all'], get_cancel_keyboard(lang))
+            state['confirm_clear'] = True
+        else:
+            if text.upper() in ['YES', 'نعم']:
+                user_alarms[chat_id] = {}
+                send_message(chat_id, TEXTS[lang]['all_alarms_cleared'], get_settings_keyboard(lang))
+                state['confirm_clear'] = False
+            else:
+                send_message(chat_id, TEXTS[lang]['cancel'], get_settings_keyboard(lang))
+                state['confirm_clear'] = False
+
+# -------------------- Messages --------------------
+
+def send_welcome_start(chat_id, lang='en'):
+    send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
+
+# -------------------- Envoi des messages --------------------
 
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
     data = {
-        "chat_id": chat_id,
-        "text": text,
-        "parse_mode": parse_mode
+        "chat_id": chat_id, 
+        "text": text
     }
+    
     if reply_markup:
         data["reply_markup"] = json.dumps(reply_markup)
+    
+    if parse_mode:
+        data["parse_mode"] = parse_mode
+    
     try:
-        requests.post(url, data=data)
+        response = requests.post(url, json=data, timeout=10)
+        if response.status_code != 200:
+            print(f"Error sending message: {response.text}")
     except requests.exceptions.RequestException as e:
-        print(f"Erreur lors de l'envoi du message: {e}")
-
-def send_welcome_start(chat_id, lang='fr'):
-    send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
-
-def send_welcome_end(chat_id, lang='fr'):
-    message = {'fr': "✅ Calcul terminé !\nChoisissez une autre option :"}
-    send_message(chat_id, message.get(lang, "✅ Terminé !"), get_main_keyboard(lang))
+        print(f"Request exception: {e}")
 
 def set_webhook():
-    """Définir le webhook pour le bot"""
-    webhook_url = os.environ.get('WEBHOOK_URL') + '/webhook'
-    url = f"{TELEGRAM_API_URL}/setWebhook?url={webhook_url}"
-    try:
-        response = requests.get(url)
-        print(f"Webhook défini: {response.json()}")
-    except requests.exceptions.RequestException as e:
-        print(f"Erreur lors de la définition du webhook: {e}")
+    """تعيين الويب هوك للبوت"""
+    webhook_url = os.environ.get('WEBHOOK_URL', '') + '/webhook'
+    if webhook_url:
+        url = f"{TELEGRAM_API_URL}/setWebhook?url={webhook_url}"
+        try:
+            response = requests.get(url)
+            print(f"Webhook set: {response.json()}")
+        except requests.exceptions.RequestException as e:
+            print(f"Error setting webhook: {e}")
+    else:
+        print("WEBHOOK_URL not set, using polling mode")
 
 if __name__ == '__main__':
-    # Définir le webhook au démarrage
+    # تعيين الويب هوك عند التشغيل
     set_webhook()
-    app.run(host='0.0.0.0', port=os.environ.get('PORT', 5000))
+    
+    # تشغيل التطبيق
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)
