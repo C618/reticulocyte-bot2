@@ -4,30 +4,30 @@ import os
 import json
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# --- Token du bot ---
-TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+# Votre token de bot
+TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_states = {}
 user_languages = {}
 active_alarms = {}
 
-# -------------------- Claviers --------------------
-def get_main_keyboard(lang='fr'):
+# Clavier principal en français
+def get_main_keyboard():
     return {
         'keyboard': [
             ['🔢 Réticulocytes', '🩸 Plaquettes'],
             ['🧪 Dilution', '⚙️ Paramètres'],
-            ['⏰ Alarme', 'ℹ️ Aide']
+            ['⏰ Minuteur', 'ℹ️ Aide']
         ],
         'resize_keyboard': True
     }
 
-def get_numeric_keyboard(lang='fr'):
+def get_numeric_keyboard():
     return {
         'keyboard': [
             ['1', '2', '3', '4', '5'],
@@ -38,78 +38,23 @@ def get_numeric_keyboard(lang='fr'):
         'resize_keyboard': True
     }
 
-def get_dilution_keyboard(lang='fr'):
-    return {
-        'keyboard': [
-            ['1/2', '1/5', '1/10'],
-            ['1/20', '1/50', '1/100'],
-            ['1/200', '1/500', '1/1000'],
-            ['Annuler']
-        ],
-        'resize_keyboard': True
-    }
+def get_cancel_keyboard():
+    return {'keyboard': [['Annuler']], 'resize_keyboard': True}
 
-def get_cancel_keyboard(lang='fr'):
-    return {
-        'keyboard': [['Annuler']],
-        'resize_keyboard': True
-    }
-
-def get_settings_keyboard(lang='fr'):
-    return {
-        'keyboard': [
-            ['🔙 Retour'],
-            ['🗑️ Effacer historique'],
-            ['📊 Statistiques']
-        ],
-        'resize_keyboard': True
-    }
-
-# -------------------- Textes --------------------
 TEXTS = {
     'fr': {
         'welcome': "👋 Bonjour ! Je suis votre assistant de laboratoire.\nChoisissez une option :",
-        'reti_fields': "🔢 Combien de champs voulez-vous analyser pour les réticulocytes ?",
-        'plaq_fields': "🩸 Combien de champs voulez-vous analyser pour les plaquettes ?",
-        'dilution_prompt': "🧪 Entrez la dilution souhaitée (ex: 1/2, 1/10) :",
-        'reti_count': "Entrez le nombre de réticulocytes dans le Champ {} :",
-        'plaq_count': "Entrez le nombre de plaquettes dans le Champ {} :",
-        'rbc_quarter': "Entrez le nombre de globules rouges dans le quart de Champ {} :",
-        'gr_auto': "⚙️ Entrez le nombre de globules rouges auto (machine) :",
+        'help_text': "ℹ️ *AIDE - Commandes disponibles*\n\n🔢 Réticulocytes\n🩸 Plaquettes\n🧪 Dilution\n⚙️ Paramètres\n⏰ Minuteur\n/start - Démarrer le bot\n/help - Aide",
         'cancel': "❌ Opération annulée.",
         'invalid_number': "⚠️ Veuillez entrer un nombre valide.",
-        'result_reti': "--- Résultat Réticulocytes ---\nTotal réticulocytes: {}\nMoyenne GR: {:.2f}\nTaux: {:.2f}%",
-        'result_plaq': "--- Résultat Plaquettes ---\nMoyenne plaquettes: {:.2f}\nMoyenne GR: {:.2f}\nGR auto: {}\nRésultat: {:.2f}",
-        'dilution_result': "🧪 Pour une dilution {}/{} :\n- Substance: {} partie(s)\n- Diluant: {} partie(s)",
-        'quantity_prompt': "Entrez la quantité totale souhaitée :",
-        'exact_volumes': "📊 Pour {} unité(s) :\n- Substance: {:.2f}\n- Diluant: {:.2f}",
-        'help_text': """ℹ️ *AIDE - Commandes disponibles*
-
-🔢 *Réticulocytes* : Calcul du taux de réticulocytes
-🩸 *Plaquettes* : Calcul du nombre de plaquettes
-🧪 *Dilution* : Préparation de dilutions
-⚙️ *Paramètres* : Configuration du bot
-⏰ *Alarme* : Définir un minuteur
-
-*Commandes rapides* :
-/start - Démarrer le bot
-/help - Afficher l'aide
-/calc - Calcul réticulocytes
-/plaquettes - Calcul plaquettes
-/dilution - Préparation dilution
-/alarm - Définir alarme""",
-        'settings': "⚙️ *Paramètres* :\n- Historique: Activé",
-        'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}",
-        'alarm_prompt': "⏰ Entrez le temps en secondes pour l'alarme :"
+        'alarm_prompt': "⏰ Entrez le temps du minuteur en secondes :",
+        'alarm_set': "✅ Minuteur réglé pour {} secondes !"
     }
 }
 
-calculations_history = []
-
-# -------------------- Webhook --------------------
 @app.route('/')
 def home():
-    return "Bot actif !"
+    return "Le bot fonctionne correctement !"
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -117,56 +62,58 @@ def webhook():
     if 'message' in data:
         chat_id = data['message']['chat']['id']
         text = data['message'].get('text', '')
-        lang = 'fr'
 
         # Commandes principales
-        if text == '/start':
-            send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
+        if text == '/start' or text == '🔙 Retour':
+            send_message(chat_id, TEXTS['fr']['welcome'], get_main_keyboard())
             user_states[chat_id] = {'step': 0}
 
-        elif text == 'ℹ️ Aide':
-            send_message(chat_id, TEXTS[lang]['help_text'], get_main_keyboard(lang), parse_mode='Markdown')
+        elif text == '/help' or text == 'ℹ️ Aide':
+            send_message(chat_id, TEXTS['fr']['help_text'], get_main_keyboard(), parse_mode='Markdown')
 
-        elif text == '⏰ Alarme':
-            send_message(chat_id, TEXTS[lang]['alarm_prompt'], get_numeric_keyboard(lang))
-            user_states[chat_id] = {'step': 900}
+        elif text == '⏰ Minuteur':
+            send_message(chat_id, TEXTS['fr']['alarm_prompt'], get_numeric_keyboard())
+            user_states[chat_id] = {'step': 'alarm'}
 
-        elif text.lower() in ['annuler']:
-            if chat_id in active_alarms:
-                active_alarms.pop(chat_id, None)
-                send_message(chat_id, "❌ Alarme annulée.", get_main_keyboard(lang))
-            else:
-                send_message(chat_id, TEXTS[lang]['cancel'], get_main_keyboard(lang))
+        elif text.lower() == 'annuler':
+            send_message(chat_id, TEXTS['fr']['cancel'], get_main_keyboard())
             user_states[chat_id] = {'step': 0}
 
         elif chat_id in user_states:
             state = user_states[chat_id]
-            # Gestion alarme
-            if state.get('step') == 900:
+            if state.get('step') == 'alarm':
                 try:
-                    delay = int(text)
-                    start_alarm(chat_id, delay)
-                    send_message(chat_id, f"✅ Alarme réglée dans {delay} secondes (durée 30s).", get_main_keyboard(lang))
+                    seconds = int(text)
+                    if seconds <= 0:
+                        raise ValueError
+                    start_alarm(chat_id, seconds)
+                    send_message(chat_id, TEXTS['fr']['alarm_set'].format(seconds), get_main_keyboard())
                     user_states[chat_id] = {'step': 0}
                 except ValueError:
-                    send_message(chat_id, TEXTS[lang]['invalid_number'], get_numeric_keyboard(lang))
+                    send_message(chat_id, TEXTS['fr']['invalid_number'], get_numeric_keyboard())
 
     return jsonify({'status': 'ok'})
 
-# -------------------- Alarme --------------------
+# -------------------- Minuteur --------------------
 def start_alarm(chat_id, delay, duration=30):
+    end_time = datetime.now() + timedelta(seconds=delay)
+
     def alarm_thread():
-        time.sleep(delay)
-        start_time = time.time()
-        while time.time() - start_time < duration and chat_id in active_alarms:
-            send_message(chat_id, "⏰ ALARME ! Le temps est écoulé.")
-            time.sleep(5)
-        active_alarms.pop(chat_id, None)
+        while chat_id in active_alarms:
+            now = datetime.now()
+            if now >= end_time:
+                start_alarm_time = time.time()
+                while time.time() - start_alarm_time < duration:
+                    send_message(chat_id, "⏰ ALARME ! Le temps est écoulé.")
+                    time.sleep(5)
+                active_alarms.pop(chat_id, None)
+                break
+            time.sleep(0.5)
 
     active_alarms[chat_id] = True
     threading.Thread(target=alarm_thread, daemon=True).start()
 
-# -------------------- Send Message --------------------
+# -------------------- Envoi des messages --------------------
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
     data = {"chat_id": chat_id, "text": text}
@@ -176,18 +123,17 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
         data["parse_mode"] = parse_mode
     try:
         requests.post(url, json=data, timeout=10)
-    except:
+    except requests.exceptions.RequestException:
         pass
 
-# -------------------- Webhook setup --------------------
 def set_webhook():
     webhook_url = os.environ.get('WEBHOOK_URL') + '/webhook'
     url = f"{TELEGRAM_API_URL}/setWebhook?url={webhook_url}"
     try:
         response = requests.get(url)
         print(f"Webhook set: {response.json()}")
-    except Exception as e:
-        print("Erreur webhook:", e)
+    except requests.exceptions.RequestException as e:
+        print(f"Error setting webhook: {e}")
 
 if __name__ == '__main__':
     set_webhook()
