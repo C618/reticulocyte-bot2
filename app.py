@@ -3,8 +3,7 @@ import requests
 import os
 import json
 import re
-from datetime import datetime, timedelta
-from apscheduler.schedulers.background import BackgroundScheduler
+from datetime import datetime
 
 app = Flask(__name__)
 
@@ -14,11 +13,6 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 user_states = {}
 user_languages = {}
-user_alarms = {}  # {chat_id: [{'name':..., 'time':..., 'job_id':...}]}
-calculations_history = []
-
-scheduler = BackgroundScheduler()
-scheduler.start()
 
 # Définition des claviers
 def get_main_keyboard(lang='fr'):
@@ -27,7 +21,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 Réticulocytes', '🩸 Plaquettes'],
                 ['🧪 Dilution', '⚙️ Paramètres'],
-                ['ℹ️ Aide', '🔄 Langue', '⏰ Rappels']
+                ['ℹ️ Aide', '🔄 Langue']
             ],
             'resize_keyboard': True
         },
@@ -35,7 +29,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 Reticulocytes', '🩸 Platelets'],
                 ['🧪 Dilution', '⚙️ Settings'],
-                ['ℹ️ Help', '🔄 Language', '⏰ Alarms']
+                ['ℹ️ Help', '🔄 Language']
             ],
             'resize_keyboard': True
         },
@@ -43,7 +37,7 @@ def get_main_keyboard(lang='fr'):
             'keyboard': [
                 ['🔢 الخلايا الشبكية', '🩸 الصفائح الدموية'],
                 ['🧪 التخفيف', '⚙️ الإعدادات'],
-                ['ℹ️ المساعدة', '🔄 اللغة', '⏰ المنبهات']
+                ['ℹ️ المساعدة', '🔄 اللغة']
             ],
             'resize_keyboard': True
         }
@@ -101,17 +95,6 @@ def get_settings_keyboard(lang='fr'):
         'resize_keyboard': True
     }
 
-def get_alarm_keyboard(lang='fr'):
-    texts = {
-        'fr': ['📝 Ajouter un rappel', '📋 Mes rappels', '🔙 Retour'],
-        'en': ['📝 Add alarm', '📋 My alarms', '🔙 Back'],
-        'ar': ['📝 إضافة منبه', '📋 منبهاتي', '🔙 رجوع']
-    }
-    return {
-        'keyboard': [[texts[lang][0]], [texts[lang][1]], [texts[lang][2]]],
-        'resize_keyboard': True
-    }
-
 # Textes multilingues
 TEXTS = {
     'fr': {
@@ -137,7 +120,6 @@ TEXTS = {
 🧪 *Dilution* : Préparation de dilutions
 ⚙️ *Paramètres* : Configuration du bot
 🔄 *Langue* : Changer la langue
-⏰ *Rappels* : Gérer les rappels
 
 *Commandes rapides* :
 /start - Démarrer le bot
@@ -146,11 +128,7 @@ TEXTS = {
 /plaquettes - Calcul plaquettes
 /dilution - Préparation dilution""",
         'settings': "⚙️ *Paramètres* :\n- Langue: Français\n- Historique: Activé",
-        'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}",
-        'alarm_help': "✍️ Envoyez votre rappel:\n- in 60 nom_du_rappel\n- YYYY-MM-DD HH:MM nom_du_rappel",
-        'alarm_set': "⏰ Rappel '{}' programmé à {}",
-        'alarm_list': "📋 Vos rappels:\n{}",
-        'no_alarms': "📋 Aucun rappel programmé"
+        'stats': "📊 *Statistiques* :\n- Calculs effectués: {}\n- Dernier calcul: {}"
     },
     'en': {
         'welcome': "👋 Hello! I'm your laboratory assistant.\nChoose an option:",
@@ -175,7 +153,6 @@ TEXTS = {
 🧪 *Dilution* : Dilution preparation
 ⚙️ *Settings* : Bot configuration
 🔄 *Language* : Change language
-⏰ *Alarms* : Manage alarms
 
 *Quick commands* :
 /start - Start bot
@@ -184,11 +161,7 @@ TEXTS = {
 /plaquettes - Calculate platelets
 /dilution - Prepare dilution""",
         'settings': "⚙️ *Settings* :\n- Language: English\n- History: Enabled",
-        'stats': "📊 *Statistics* :\n- Calculations done: {}\n- Last calculation: {}",
-        'alarm_help': "✍️ Send your alarm:\n- in 60 alarm_name\n- YYYY-MM-DD HH:MM alarm_name",
-        'alarm_set': "⏰ Alarm '{}' scheduled for {}",
-        'alarm_list': "📋 Your alarms:\n{}",
-        'no_alarms': "📋 No alarms scheduled"
+        'stats': "📊 *Statistics* :\n- Calculations done: {}\n- Last calculation: {}"
     },
     'ar': {
         'welcome': "👋 مرحبًا! أنا مساعدك في المختبر.\nاختر خيارًا:",
@@ -213,7 +186,6 @@ TEXTS = {
 🧪 *التخفيف* : تحضير المحاليل المخففة
 ⚙️ *الإعدادات* : تكوين البوت
 🔄 *اللغة* : تغيير اللغة
-⏰ *المنبهات* : إدارة المنبهات
 
 *أوامر سريعة* :
 /start - بدء البوت
@@ -222,11 +194,7 @@ TEXTS = {
 /plaquettes - حساب الصفائح الدموية
 /dilution - تحضير التخفيف""",
         'settings': "⚙️ *الإعدادات* :\n- اللغة: العربية\n- السجل: مفعل",
-        'stats': "📊 *الإحصائيات* :\n- عدد العمليات الحسابية: {}\n- آخر عملية: {}",
-        'alarm_help': "✍️ أرسل منبهك:\n- in 60 اسم_المنبه\n- YYYY-MM-DD HH:MM اسم_المنبه",
-        'alarm_set': "⏰ تم جدولة المنبه '{}' في {}",
-        'alarm_list': "📋 منبهاتك:\n{}",
-        'no_alarms': "📋 لا توجد منبهات مجدولة"
+        'stats': "📊 *الإحصائيات* :\n- عدد العمليات الحسابية: {}\n- آخر عملية: {}"
     }
 }
 
@@ -288,34 +256,12 @@ def webhook():
                                                    calculations_history[-1]['type'] if calculations_history else 'None')
             send_message(chat_id, stats_text, get_main_keyboard(lang), parse_mode='Markdown')
         
-        # Gestion des rappels
-        elif text == '⏰ Rappels' or text == '⏰ Alarms' or text == '⏰ المنبهات':
-            send_message(chat_id, TEXTS[lang]['alarm_help'], get_alarm_keyboard(lang))
-        
-        elif text == '📝 Ajouter un rappel' or text == '📝 Add alarm' or text == '📝 إضافة منبه':
-            send_message(chat_id, TEXTS[lang]['alarm_help'], get_cancel_keyboard(lang))
-            user_states[chat_id] = {'awaiting_alarm': True, 'lang': lang}
-        
-        elif text == '📋 Mes rappels' or text == '📋 My alarms' or text == '📋 منبهاتي':
-            alarms = user_alarms.get(chat_id, [])
-            if alarms:
-                alarm_list = "\n".join([f"⏰ {alarm['name']} - {alarm['time']}" for alarm in alarms])
-                send_message(chat_id, TEXTS[lang]['alarm_list'].format(alarm_list), get_alarm_keyboard(lang))
-            else:
-                send_message(chat_id, TEXTS[lang]['no_alarms'], get_alarm_keyboard(lang))
-        
         elif text.lower() in ['annuler', 'cancel', 'إلغاء']:
             send_message(chat_id, TEXTS[lang]['cancel'], get_main_keyboard(lang))
             user_states[chat_id] = {'step': 0}
         
         elif chat_id in user_states:
-            if user_states[chat_id].get('awaiting_alarm'):
-                handle_alarm_input(chat_id, text, lang)
-            else:
-                handle_input(chat_id, text, lang)
-    
-    elif 'callback_query' in data:
-        handle_callback(data['callback_query'])
+            handle_input(chat_id, text, lang)
     
     return jsonify({'status': 'ok'})
 
@@ -487,91 +433,6 @@ def handle_dilution(chat_id, text, lang):
     except (ValueError, AttributeError):
         send_message(chat_id, TEXTS[lang]['invalid_number'], get_dilution_keyboard(lang))
 
-# -------------------- Gestion des rappels --------------------
-
-def handle_alarm_input(chat_id, text, lang):
-    if text.lower() in ['annuler', 'cancel', 'إلغاء']:
-        send_message(chat_id, TEXTS[lang]['cancel'], get_main_keyboard(lang))
-        user_states[chat_id] = {'step': 0}
-        return
-    
-    try:
-        if text.startswith("in "):
-            parts = text.split(" ", 2)
-            minutes = int(parts[1])
-            name = parts[2] if len(parts) > 2 else "Rappel"
-            alarm_time = datetime.now() + timedelta(minutes=minutes)
-        else:
-            # Essayer de parser la date et l'heure
-            parts = text.split(" ", 2)
-            if len(parts) >= 3:
-                date_str, time_str, name = parts[0], parts[1], parts[2]
-                alarm_time = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M")
-            else:
-                raise ValueError("Format incorrect")
-        
-        job = scheduler.add_job(send_alarm, 'date', run_date=alarm_time, args=[chat_id, name, lang])
-        user_alarms.setdefault(chat_id, []).append({
-            'name': name, 
-            'time': alarm_time.strftime('%Y-%m-%d %H:%M'), 
-            'job_id': job.id
-        })
-        
-        send_message(chat_id, TEXTS[lang]['alarm_set'].format(name, alarm_time.strftime('%Y-%m-%d %H:%M')), get_main_keyboard(lang))
-        user_states[chat_id] = {'step': 0}
-        
-    except Exception as e:
-        send_message(chat_id, TEXTS[lang]['invalid_number'], get_alarm_keyboard(lang))
-
-def send_alarm(chat_id, name, lang):
-    keyboard = {
-        'inline_keyboard': [
-            [{'text': '⏱️ Reporter 5 min', 'callback_data': f'postpone|{name}|5'}],
-            [{'text': '✅ Terminer', 'callback_data': f'done|{name}'}]
-        ]
-    }
-    alarm_text = {
-        'fr': f"🚨 Rappel: {name}",
-        'en': f"🚨 Alarm: {name}",
-        'ar': f"🚨 منبه: {name}"
-    }
-    send_message(chat_id, alarm_text.get(lang, alarm_text['fr']), reply_markup=keyboard)
-
-def handle_callback(callback):
-    chat_id = callback['message']['chat']['id']
-    data = callback['data']
-    lang = user_languages.get(chat_id, 'fr')
-    
-    if data.startswith('postpone'):
-        _, name, mins = data.split('|')
-        mins = int(mins)
-        alarms = user_alarms.get(chat_id, [])
-        for alarm in alarms:
-            if alarm['name'] == name:
-                try:
-                    scheduler.remove_job(alarm['job_id'])
-                    new_time = datetime.now() + timedelta(minutes=mins)
-                    job = scheduler.add_job(send_alarm, 'date', run_date=new_time, args=[chat_id, name, lang])
-                    alarm['time'] = new_time.strftime('%Y-%m-%d %H:%M')
-                    alarm['job_id'] = job.id
-                    send_message(chat_id, f"⏱️ Reporté à {new_time.strftime('%H:%M')}")
-                except:
-                    pass
-                break
-                
-    elif data.startswith('done'):
-        _, name = data.split('|')
-        alarms = user_alarms.get(chat_id, [])
-        for alarm in alarms:
-            if alarm['name'] == name:
-                try:
-                    scheduler.remove_job(alarm['job_id'])
-                    alarms.remove(alarm)
-                    send_message(chat_id, "✅ Terminé!")
-                except:
-                    pass
-                break
-
 # -------------------- Messages --------------------
 
 def send_welcome_start(chat_id, lang='fr'):
@@ -622,3 +483,4 @@ if __name__ == '__main__':
     # تشغيل التطبيق
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
