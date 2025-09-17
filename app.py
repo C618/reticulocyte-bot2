@@ -1,6 +1,3 @@
-أرى أن الكود كان يعمل سابقًا. المشكلة الرئيسية هي أن الكود الذي أضفته يحتوي على أخطاء في معالجة الحالات. سأقوم بإرجاع الكود إلى حالته الأصلية التي كانت تعمل مع إضافة وظيفة التذكيرات بشكل صحيح:
-
-```python
 from flask import Flask, request, jsonify
 import requests
 import os
@@ -643,3 +640,4 @@ if __name__ == '__main__':
     # التشغيل في بيئة الإنتاج
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
