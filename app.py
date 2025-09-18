@@ -72,7 +72,7 @@ TEXTS = {
     'cancel': "❌ Opération annulée.",
     'invalid_number': "⚠️ Veuillez entrer un nombre valide.",
     'result_reti': "--- Résultat Réticulocytes ---\nTotal réticulocytes: {}\nMoyenne GR: {:.2f}\nTaux: {:.2f}%",
-    'result_plaq': "--- Résultat Plaquettes ---\nMoyenne plaquettes: {:.2f}\nMoyenne GR: {:.2f}\nGR auto: {}\nRésultat: {:.2f}",
+    'result_plaq': "--- Résultat Plaquettes ---\nMoyenne plaquettes: {:.2f}\nMoyenne GR: {:.2f}\nGR auto: {}\nRésultat: {}",
     'dilution_result': "🧪 Pour une dilution {}/{} :\n- Substance: {} partie(s)\n- Diluant: {} partie(s)",
     'quantity_prompt': "Entrez la quantité totale souhaitée :",
     'exact_volumes': "📊 Pour {} unité(s) :\n- Substance: {:.2f}\n- Diluant: {:.2f}",
@@ -258,7 +258,10 @@ def handle_plaquettes(chat_id, value):
             'timestamp': datetime.now().isoformat()
         })
 
-        message = TEXTS['result_plaq'].format(plaq_moy, avg_rbc, state['gr_auto'], result)
+        # ✅ Résultat en notation scientifique
+        result_sci = "{:.2e}".format(result)
+
+        message = TEXTS['result_plaq'].format(plaq_moy, avg_rbc, state['gr_auto'], result_sci)
         send_message(chat_id, message, get_main_keyboard())
         send_welcome_end(chat_id)
         user_states[chat_id] = {'step': 0}
