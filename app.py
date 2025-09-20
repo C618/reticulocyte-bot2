@@ -79,7 +79,7 @@ def get_language_keyboard():
     return {
         'keyboard': [
             ['🇫🇷 Français', '🇬🇧 English'],
-            ['🇸🇦 العربية', '🔙 Retour']
+            ['🇲🇦 العربية', '🔙 Retour']
         ],
         'resize_keyboard': True
     }
@@ -483,4 +483,5 @@ if __name__ == '__main__':
     # تشغيل التطبيق
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
+
 
