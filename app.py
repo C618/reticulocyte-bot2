@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 import requests
 import os
 import json
-import re
 from datetime import datetime
 
 app = Flask(__name__)
@@ -47,70 +46,14 @@ def get_main_keyboard(lang='fr'):
     }
     return keyboards.get(lang, keyboards['fr'])
 
-def get_numeric_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler', 'en': 'Cancel', 'ar': 'إلغاء'}
-    return {
-        'keyboard': [
-            ['1', '2', '3', '4', '5'],
-            ['6', '7', '8', '9', '10'],
-            ['15', '20', '25', '30', '50'],
-            [cancel_text[lang]]
-        ],
-        'resize_keyboard': True
-    }
-
-def get_dilution_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler', 'en': 'Cancel', 'ar': 'إلغاء'}
-    return {
-        'keyboard': [
-            ['1/2', '1/5', '1/10'],
-            ['1/20', '1/50', '1/100'],
-            ['1/200', '1/500', '1/1000'],
-            [cancel_text[lang]]
-        ],
-        'resize_keyboard': True
-    }
-
-def get_cancel_keyboard(lang='fr'):
-    cancel_text = {'fr': 'Annuler', 'en': 'Cancel', 'ar': 'إلغاء'}
-    return {
-        'keyboard': [[cancel_text[lang]]],
-        'resize_keyboard': True
-    }
-
-def get_language_keyboard():
-    return {
-        'keyboard': [
-            ['🇫🇷 Français', '🇬🇧 English'],
-            ['🇸🇦 العربية', '🔙 Retour']
-        ],
-        'resize_keyboard': True
-    }
-
-def get_settings_keyboard(lang='fr'):
-    texts = {
-        'fr': ['🔙 Retour', '🗑️ Effacer historique', '📊 Statistiques'],
-        'en': ['🔙 Back', '🗑️ Clear history', '📊 Statistics'],
-        'ar': ['🔙 رجوع', '🗑️ مسح السجل', '📊 الإحصائيات']
-    }
-    return {
-        'keyboard': [[texts[lang][0]], [texts[lang][1]], [texts[lang][2]]],
-        'resize_keyboard': True
-    }
-
-# -------------------- Textes --------------------
-TEXTS = {
-    # ... (نسخ TEXTS من كودك السابق كما هو) ...
-}
-
-# -------------------- ChatGPT API --------------------
+# -------------------- ChatGPT API محسّنة --------------------
 def ask_openai(prompt):
     headers = {
         "Authorization": f"Bearer {OPENAI_API_KEY}",
         "Content-Type": "application/json"
     }
     data = {
-        "model": "gpt-4o-mini",
+        "model": "gpt-4o-mini",  # أو gpt-3.5-turbo
         "messages": [{"role": "user", "content": prompt}]
     }
     try:
@@ -118,11 +61,17 @@ def ask_openai(prompt):
             "https://api.openai.com/v1/chat/completions",
             headers=headers, json=data, timeout=15
         )
-        return response.json()["choices"][0]["message"]["content"]
+        result = response.json()
+        if "choices" in result and len(result["choices"]) > 0:
+            return result["choices"][0]["message"]["content"]
+        elif "error" in result:
+            return f"Erreur ChatGPT: {result['error'].get('message','Unknown error')}"
+        else:
+            return f"Erreur ChatGPT: réponse inattendue {result}"
     except Exception as e:
-        return f"Erreur ChatGPT: {str(e)}"
+        return f"Erreur ChatGPT Exception: {str(e)}"
 
-# -------------------- Messages --------------------
+# -------------------- Envoi des messages --------------------
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     url = f"{TELEGRAM_API_URL}/sendMessage"
     data = {
@@ -138,18 +87,7 @@ def send_message(chat_id, text, reply_markup=None, parse_mode=None):
     except requests.exceptions.RequestException:
         pass
 
-def send_welcome_start(chat_id, lang='fr'):
-    send_message(chat_id, TEXTS[lang]['welcome'], get_main_keyboard(lang))
-
-def send_welcome_end(chat_id, lang='fr'):
-    message = {
-        'fr': "✅ Calcul terminé !\nChoisissez une autre option :",
-        'en': "✅ Calculation completed!\nChoose another option:",
-        'ar': "✅ اكتمل الحساب!\nاختر خيارًا آخر:"
-    }
-    send_message(chat_id, message.get(lang, "✅ Done!"), get_main_keyboard(lang))
-
-# -------------------- Gestion du webhook --------------------
+# -------------------- Webhook --------------------
 @app.route('/webhook', methods=['POST'])
 def webhook():
     data = request.get_json()
@@ -160,16 +98,15 @@ def webhook():
 
         handled = False
 
-        # -------------------- Commandes existantes --------------------
+        # -------------------- Commandes existantes (exemple minimal) --------------------
         if text == '/start' or text in ['🔙 Retour','🔙 Back','🔙 رجوع']:
-            send_welcome_start(chat_id, lang)
+            send_message(chat_id, "👋 Bienvenue! Choisissez une option:", get_main_keyboard(lang))
             user_states[chat_id] = {'step': 0}
             handled = True
         elif text in ['/help','ℹ️ Aide','ℹ️ Help','ℹ️ المساعدة']:
-            send_message(chat_id, TEXTS[lang]['help_text'], get_main_keyboard(lang), parse_mode='Markdown')
+            send_message(chat_id, "ℹ️ Commandes disponibles: ...", get_main_keyboard(lang))
             handled = True
-        # ... هنا يجب نسخ كل باقي أوامر البوت الأصلية من كودك السابق ...
-        
+
         # -------------------- ChatGPT fallback --------------------
         if not handled:
             reply = ask_openai(text)
@@ -181,7 +118,7 @@ def webhook():
 def home():
     return "Le bot fonctionne correctement !"
 
-# -------------------- Webhook --------------------
+# -------------------- Webhook setup --------------------
 def set_webhook():
     webhook_url = os.environ.get('WEBHOOK_URL') + '/webhook'
     url = f"{TELEGRAM_API_URL}/setWebhook?url={webhook_url}"
@@ -195,5 +132,3 @@ if __name__ == '__main__':
     set_webhook()
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port, debug=False)
-
-
