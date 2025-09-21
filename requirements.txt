@@ -1,5 +1,6 @@
 Flask==2.3.3
 requests==2.31.0
+python-telegram-bot deepseek-api
 yt-dlp==2023.11.16
 pyTelegramBotAPI
 requests
