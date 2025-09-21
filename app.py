@@ -10,24 +10,29 @@ app = Flask(__name__)
 TELEGRAM_TOKEN = os.environ.get('TELEGRAM_TOKEN')
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
-# DeepSeek API
-DEESEEKB_API_KEY = "sk-c092b5aecb284089adae770a030c0026"
-DEESEEKB_API_URL = "https://api.deepseek.com/v1/query"
+# DeepSeek API - استخدام متغير بيئة بدلاً من المفتاح المضمن
+DEEPSEEK_API_KEY = os.environ.get('DEEPSEEK_API_KEY', 'sk-c092b5aecb284089adae770a030c0026')
+DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"  # URL مصحح
 
 def query_deepseek(prompt: str):
     headers = {
-        "Authorization": f"Bearer {DEESEEKB_API_KEY}",
+        "Authorization": f"Bearer {DEEPSEEK_API_KEY}",
         "Content-Type": "application/json"
     }
-    payload = {"prompt": prompt, "max_tokens": 500}
+    # بنية payload مصححة لـ DeepSeek API
+    payload = {
+        "model": "deepseek-chat",
+        "messages": [
+            {"role": "user", "content": prompt}
+        ],
+        "max_tokens": 500
+    }
     try:
-        response = requests.post(DEESEEKB_API_URL, headers=headers, json=payload, timeout=15)
+        response = requests.post(DEEPSEEK_API_URL, headers=headers, json=payload, timeout=15)
         response.raise_for_status()
         data = response.json()
-        if "result" in data:
-            return data["result"]
-        elif "choices" in data and len(data["choices"]) > 0:
-            return data["choices"][0].get("text", "")
+        if "choices" in data and len(data["choices"]) > 0:
+            return data["choices"][0]["message"]["content"]
         else:
             return "Aucun résultat retourné par DeepSeek."
     except requests.exceptions.RequestException as e:
@@ -132,34 +137,45 @@ def webhook():
 
         elif text in ['/calc', '🔢 Réticulocytes']:
             send_message(chat_id, TEXTS['reti_fields'], get_numeric_keyboard())
-            user_states[chat_id] = {'step': 50, 'type': 'reti', 'reti_counts': [], 'rbc_counts': [], 'nb_champs': None}
+            user_states[chat_id] = {'step': 1, 'type': 'reti', 'reti_counts': [], 'rbc_counts': [], 'nb_champs': None}
 
         elif text in ['/plaquettes', '🩸 Plaquettes']:
             send_message(chat_id, TEXTS['plaq_fields'], get_numeric_keyboard())
-            user_states[chat_id] = {'step': 100, 'type': 'plaq', 'plaq_counts': [], 'rbc_counts': [], 'gr_auto': None, 'nb_champs': None}
+            user_states[chat_id] = {'step': 1, 'type': 'plaq', 'plaq_counts': [], 'rbc_counts': [], 'gr_auto': None, 'nb_champs': None}
 
         elif text in ['/dilution', '🧪 Dilution']:
             send_message(chat_id, TEXTS['dilution_prompt'], get_dilution_keyboard())
-            user_states[chat_id] = {'step': 400, 'type': 'dilution'}
+            user_states[chat_id] = {'step': 1, 'type': 'dilution'}
 
         elif text == '🔍 DeepSeek':
-            prompt_text = "Analyse complète pour l'échantillon fourni"
-            result = query_deepseek(prompt_text)
-            send_message(chat_id, f"Résultat DeepSeek:\n{result}", get_main_keyboard())
+            send_message(chat_id, "Veuillez entrer votre question pour DeepSeek:", get_cancel_keyboard())
+            user_states[chat_id] = {'step': 1, 'type': 'deepseek'}
 
         elif text.lower() in ['annuler', 'cancel', 'إلغاء']:
             send_message(chat_id, TEXTS['cancel'], get_main_keyboard())
-            user_states[chat_id] = {'step': 0}
+            if chat_id in user_states:
+                user_states[chat_id] = {'step': 0}
 
         elif chat_id in user_states:
             handle_input(chat_id, text)
+        else:
+            send_message(chat_id, TEXTS['welcome'], get_main_keyboard())
+            user_states[chat_id] = {'step': 0}
+            
     return jsonify({'status': 'ok'})
 
 # -------------------- Gestion inputs --------------------
 def handle_input(chat_id, text):
-    state = user_states[chat_id]
+    state = user_states.get(chat_id, {'step': 0})
+    
+    if state.get('type') == 'deepseek':
+        result = query_deepseek(text)
+        send_message(chat_id, f"Résultat DeepSeek:\n{result}", get_main_keyboard())
+        user_states[chat_id] = {'step': 0}
+        return
+        
     try:
-        if state.get('type') != 'dilution':
+        if state.get('type') != 'dilution' and text not in ['1/2', '1/5', '1/10', '1/20', '1/50', '1/100', '1/200', '1/500', '1/1000']:
             value = float(text) if '.' in text else int(text)
             if value < 0:
                 send_message(chat_id, TEXTS['invalid_number'], get_numeric_keyboard())
@@ -176,9 +192,122 @@ def handle_input(chat_id, text):
     except ValueError:
         send_message(chat_id, TEXTS['invalid_number'], get_numeric_keyboard())
 
-# -------------------- Fonctions Réticulocytes / Plaquettes / Dilution --------------------
-# ... يمكن إضافة نفس الدوال handle_reti, handle_plaquettes, handle_dilution كما في الكود الأصلي
-# بدون تغيير، مع إزالة كل النصوص غير الفرنسية
+# -------------------- Fonctions manquantes --------------------
+def handle_reti(chat_id, value):
+    state = user_states[chat_id]
+    
+    if state['step'] == 1:  # عدد الحقول
+        state['nb_champs'] = value
+        state['step'] = 2
+        state['current_champ'] = 1
+        send_message(chat_id, TEXTS['reti_count'].format(state['current_champ']), get_cancel_keyboard())
+    
+    elif state['step'] == 2:  # عدد الخلايا الشبكية
+        state['reti_counts'].append(value)
+        state['step'] = 3
+        send_message(chat_id, TEXTS['rbc_quarter'].format(state['current_champ']), get_cancel_keyboard())
+    
+    elif state['step'] == 3:  # عدد كريات الدم الحمراء
+        state['rbc_counts'].append(value * 4)  # تحويل الربع إلى كامل
+        state['current_champ'] += 1
+        
+        if state['current_champ'] > state['nb_champs']:
+            # حساب النتائج
+            total_reti = sum(state['reti_counts'])
+            avg_rbc = sum(state['rbc_counts']) / state['nb_champs']
+            rate = (total_reti / (avg_rbc * state['nb_champs'])) * 100
+            
+            result = TEXTS['result_reti'].format(total_reti, avg_rbc, rate)
+            send_message(chat_id, result, get_main_keyboard())
+            
+            # حفظ في السجل
+            calculations_history.append({
+                'type': 'reti',
+                'timestamp': datetime.now(),
+                'result': result
+            })
+            
+            user_states[chat_id] = {'step': 0}
+        else:
+            state['step'] = 2
+            send_message(chat_id, TEXTS['reti_count'].format(state['current_champ']), get_cancel_keyboard())
+
+def handle_plaquettes(chat_id, value):
+    state = user_states[chat_id]
+    
+    if state['step'] == 1:  # عدد الحقول
+        state['nb_champs'] = value
+        state['step'] = 2
+        state['current_champ'] = 1
+        send_message(chat_id, TEXTS['plaq_count'].format(state['current_champ']), get_cancel_keyboard())
+    
+    elif state['step'] == 2:  # عدد الصفائح الدموية
+        state['plaq_counts'].append(value)
+        state['step'] = 3
+        send_message(chat_id, TEXTS['rbc_quarter'].format(state['current_champ']), get_cancel_keyboard())
+    
+    elif state['step'] == 3:  # عدد كريات الدم الحمراء
+        state['rbc_counts'].append(value * 4)  # تحويل الربع إلى كامل
+        state['current_champ'] += 1
+        
+        if state['current_champ'] > state['nb_champs']:
+            state['step'] = 4
+            send_message(chat_id, TEXTS['gr_auto'], get_cancel_keyboard())
+        else:
+            state['step'] = 2
+            send_message(chat_id, TEXTS['plaq_count'].format(state['current_champ']), get_cancel_keyboard())
+    
+    elif state['step'] == 4:  # عدد كريات الدم الحمراء التلقائي
+        state['gr_auto'] = value
+        
+        # حساب النتائج
+        avg_plaq = sum(state['plaq_counts']) / state['nb_champs']
+        avg_rbc = sum(state['rbc_counts']) / state['nb_champs']
+        result_value = (avg_plaq * state['gr_auto']) / avg_rbc
+        
+        result = TEXTS['result_plaq'].format(avg_plaq, avg_rbc, state['gr_auto'], result_value)
+        send_message(chat_id, result, get_main_keyboard())
+        
+        # حفظ في السجل
+        calculations_history.append({
+            'type': 'plaq',
+            'timestamp': datetime.now(),
+            'result': result
+        })
+        
+        user_states[chat_id] = {'step': 0}
+
+def handle_dilution(chat_id, value):
+    state = user_states[chat_id]
+    
+    if state['step'] == 1:  # نسبة التخفيف
+        if value in ['1/2', '1/5', '1/10', '1/20', '1/50', '1/100', '1/200', '1/500', '1/1000']:
+            parts = value.split('/')
+            state['dilution_num'] = int(parts[0])
+            state['dilution_den'] = int(parts[1])
+            state['step'] = 2
+            send_message(chat_id, TEXTS['quantity_prompt'], get_cancel_keyboard())
+        else:
+            send_message(chat_id, "Format de dilution invalide. Utilisez le format 1/10, 1/100, etc.", get_dilution_keyboard())
+    
+    elif state['step'] == 2:  # الكمية الإجمالية
+        total_quantity = float(value)
+        substance = total_quantity / state['dilution_den']
+        diluant = total_quantity - substance
+        
+        result1 = TEXTS['dilution_result'].format(state['dilution_num'], state['dilution_den'], state['dilution_num'], state['dilution_den'] - state['dilution_num'])
+        result2 = TEXTS['exact_volumes'].format(total_quantity, substance, diluant)
+        
+        send_message(chat_id, f"{result1}\n\n{result2}", get_main_keyboard())
+        
+        # حفظ في السجل
+        calculations_history.append({
+            'type': 'dilution',
+            'timestamp': datetime.now(),
+            'result': f"{result1} | {result2}"
+        })
+        
+        user_states[chat_id] = {'step': 0}
 
 # -------------------- Envoi messages --------------------
 def send_message(chat_id, text, reply_markup=None, parse_mode=None):
